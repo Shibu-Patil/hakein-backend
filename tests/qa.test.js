@@ -248,7 +248,7 @@ describe('tokens + model errors', () => {
     const { friendlyModelError } = await import('../src/services/aiProviders.js');
     const e503 = friendlyModelError(new Error('[503 Service Unavailable] high demand'), 'gemini-3.6-flash');
     assert.equal(e503.status, 502);
-    assert.ok(/agent\.yaml/.test(e503.message));
+    assert.ok(/overloaded|wait a minute/i.test(e503.message));
     const e404 = friendlyModelError(new Error('model not found'), 'bad-model');
     assert.equal(e404.status, 502);
   });

@@ -28,6 +28,12 @@ class BaseProvider {
   }
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function isTransient(err) {
+  return /503|overloaded|high demand|Service Unavailable|429|rate limit|timeout|ETIMEDOUT|ECONNRESET|500/i.test(String(err?.message || err));
+}
+
 class GeminiProvider extends BaseProvider {
   constructor(apiKey, model) {
     super(apiKey, model);
@@ -36,11 +42,22 @@ class GeminiProvider extends BaseProvider {
   }
 
   async generate(prompt) {
+    // Transient spikes (503 overloaded) are retried with backoff instead of failing the resume.
     let result;
-    try {
-      result = await this.generativeModel.generateContent(prompt);
-    } catch (e) {
-      throw friendlyModelError(e, this.model);
+    let lastErr = null;
+    for (const wait of [0, 3000, 8000]) {
+      if (wait) await sleep(wait);
+      try {
+        result = await this.generativeModel.generateContent(prompt);
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+        if (!isTransient(e)) break;
+      }
+    }
+    if (!result) {
+      throw friendlyModelError(lastErr, this.model);
     }
     const um = result.response?.usageMetadata;
     this.lastUsage = um
@@ -131,7 +148,7 @@ export function friendlyModelError(err, model) {
   const msg = String(err?.message || err);
   if (/503|overloaded|high demand|Service Unavailable/i.test(msg)) {
     const e = new Error(
-      `Model "${model}" is unavailable (overloaded or wrong name). Check the model name in agent.yaml — valid Gemini names look like gemini-2.0-flash, gemini-1.5-pro, gemini-1.5-flash.`
+      `Model "${model}" stayed overloaded after retries. Wait a minute and try again — spikes are temporary. (Your key and model name are both valid.)`
     );
     e.status = 502;
     e.cause = msg.slice(0, 300);
