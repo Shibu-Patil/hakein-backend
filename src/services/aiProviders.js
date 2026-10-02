@@ -31,7 +31,7 @@ class BaseProvider {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function isTransient(err) {
-  return /503|overloaded|high demand|Service Unavailable|429|rate limit|timeout|ETIMEDOUT|ECONNRESET|500/i.test(String(err?.message || err));
+  return /503|overloaded|high demand|Service Unavailable|429|rate limit|timeout|ETIMEDOUT|ECONNRESET|500|fetch failed|network|socket|hang up|EAI_AGAIN|ENOTFOUND/i.test(String(err?.message || err));
 }
 
 class GeminiProvider extends BaseProvider {
