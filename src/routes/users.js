@@ -201,11 +201,14 @@ usersRoutes.post('/:id/answer-preview', async (req, res, next) => {
     const user = await User.findById(req.params.id).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
     const { answerQuestion } = await import('../services/qaService.js');
+    const { defaultAI } = await import('../lib/agentConfig.js');
     let aiProvider = null;
-    const key = value.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-    if (key) {
-      const { AIProviderFactory } = await import('../services/aiProviders.js');
-      aiProvider = AIProviderFactory.create(value.provider, key);
+    try {
+      aiProvider = value.apiKey
+        ? (await import('../services/aiProviders.js')).AIProviderFactory.create(value.provider, value.apiKey)
+        : defaultAI('qa');
+    } catch {
+      aiProvider = null;
     }
     const profile = user.profile || {};
     const resumeText = [profile.summary, JSON.stringify(profile.experience || []), JSON.stringify(profile.skills || {})].join('\n').slice(0, 6000);

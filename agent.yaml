@@ -1,0 +1,56 @@
+# Hakein agent config — ONE file to choose your AI.
+# Change `active` (or any task below) to a name from `agents`, restart the server/worker.
+# Keys are NEVER written here — each agent points at an env var you set in .env.
+# Add your own entries freely: { provider, model, apiKeyEnv }. Whatever you list becomes choosable.
+
+active: gemini
+
+agents:
+  gemini:
+    provider: gemini
+    model: gemini-1.5-pro
+    apiKeyEnv: GEMINI_API_KEY
+
+  gemini-flash:
+    provider: gemini
+    model: gemini-1.5-flash
+    apiKeyEnv: GEMINI_API_KEY
+
+  openai:
+    provider: openai
+    model: gpt-4-turbo-preview
+    apiKeyEnv: OPENAI_API_KEY
+
+  openai-mini:
+    provider: openai
+    model: gpt-4o-mini
+    apiKeyEnv: OPENAI_API_KEY
+
+  anthropic:
+    provider: anthropic
+    model: claude-3-opus-20240229
+    apiKeyEnv: ANTHROPIC_API_KEY
+
+  anthropic-haiku:
+    provider: anthropic
+    model: claude-3-haiku-20240307
+    apiKeyEnv: ANTHROPIC_API_KEY
+
+  # One key, hundreds of models (https://openrouter.ai/models).
+  # Swap `model` to anything, e.g. meta-llama/llama-3.1-70b-instruct, mistralai/mixtral-8x7b.
+  openrouter:
+    provider: openrouter
+    model: meta-llama/llama-3.1-70b-instruct
+    apiKeyEnv: OPENROUTER_API_KEY
+
+  openrouter-cheap:
+    provider: openrouter
+    model: google/gemini-flash-1.5
+    apiKeyEnv: OPENROUTER_API_KEY
+
+# Per-job overrides. Each value must be a name from `agents`.
+# Omit a task (or the whole block) and it follows `active`.
+tasks:
+  resume: gemini
+  qa: gemini-flash
+  scoring: gemini

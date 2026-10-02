@@ -6,6 +6,7 @@ import { ResumeService } from '../services/resumeService.js';
 import { JobExtractorService } from '../services/jobExtractor.js';
 import { AIProviderFactory } from '../services/aiProviders.js';
 import { resumeTextToPdf } from '../services/pdfGenerator.js';
+import { defaultAI } from '../lib/agentConfig.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -112,8 +113,14 @@ resumeRoutes.post('/generate', async (req, res, next) => {
     }
 
     const { provider, jobInput, options } = value;
-    const apiKey = value.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(400).json({ error: 'No API key. Pass apiKey or set GEMINI_API_KEY on the server.' });
+    let aiProvider;
+    try {
+      aiProvider = value.apiKey
+        ? AIProviderFactory.create(provider || 'gemini', value.apiKey)
+        : defaultAI('resume');
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
     const { userProfile } = value;
 
     let jobDescription;
@@ -122,8 +129,6 @@ resumeRoutes.post('/generate', async (req, res, next) => {
     } else {
       jobDescription = jobInput.content;
     }
-
-    const aiProvider = AIProviderFactory.create(provider, apiKey);
     const result = await resumeService.generateTailoredResume(
       userProfile,
       jobDescription,
@@ -148,12 +153,14 @@ resumeRoutes.post('/analyze-ats', async (req, res, next) => {
       return res.status(400).json({ error: error.details[0].message });
     }
 
-    const key = req.body.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-    if (!key) return res.status(400).json({ error: 'No API key. Pass apiKey or set GEMINI_API_KEY on the server.' });
-    const aiProvider = AIProviderFactory.create(
-      req.body.provider || 'gemini',
-      key
-    );
+    let aiProvider;
+    try {
+      aiProvider = req.body.apiKey
+        ? AIProviderFactory.create(req.body.provider || 'gemini', req.body.apiKey)
+        : defaultAI('scoring');
+    } catch (e) {
+      return res.status(400).json({ error: e.message });
+    }
     const analysis = await resumeService.analyzeATS(value.resume, value.jobDescription, aiProvider);
     res.json(analysis);
   } catch (err) {
@@ -175,8 +182,12 @@ resumeRoutes.post('/tailor-public', publicLimiter, async (req, res, next) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'Server AI key not configured.' });
+    let aiProvider;
+    try {
+      aiProvider = defaultAI('resume');
+    } catch (e) {
+      return res.status(503).json({ error: e.message });
+    }
 
     let jobDescription;
     if (value.jobInput.type === 'url') {
@@ -185,7 +196,6 @@ resumeRoutes.post('/tailor-public', publicLimiter, async (req, res, next) => {
       jobDescription = value.jobInput.content;
     }
 
-    const aiProvider = AIProviderFactory.create(process.env.RESUME_PROVIDER || 'gemini', apiKey);
     const result = await resumeService.tailorFromResumeText(value.resumeText, jobDescription, aiProvider, { format: 'ats' });
     res.json(result);
   } catch (err) {
@@ -204,8 +214,12 @@ resumeRoutes.post('/tailor-file', publicLimiter, upload.single('resume'), async 
       return res.status(400).json({ error: 'Send jobText (JD) or jobUrl (job link) alongside the file.' });
     }
 
-    const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-    if (!apiKey) return res.status(503).json({ error: 'Server AI key not configured.' });
+    let aiProvider;
+    try {
+      aiProvider = defaultAI('resume');
+    } catch (e) {
+      return res.status(503).json({ error: e.message });
+    }
 
     const resumeText = (await fileToText(req.file)).replace(/\s+/g, ' ').trim();
     if (resumeText.length < 50) {
@@ -216,7 +230,6 @@ resumeRoutes.post('/tailor-file', publicLimiter, upload.single('resume'), async 
       ? await jobExtractor.extractFromUrl(jobUrl)
       : jobText;
 
-    const aiProvider = AIProviderFactory.create(process.env.RESUME_PROVIDER || 'gemini', apiKey);
     const result = await resumeService.tailorFromResumeText(resumeText, jobDescription, aiProvider, { format: 'ats' });
     const pdf = await resumeTextToPdf({
       name: resumeText.split('\n')[0]?.slice(0, 80) || 'Resume',

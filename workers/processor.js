@@ -10,6 +10,12 @@ import { resumeTextToPdf } from '../src/services/pdfGenerator.js';
 import { resolveCredentials } from '../src/services/auth.js';
 import { createPendingQuestions } from '../src/services/qaService.js';
 import { notifyUser } from '../src/services/notify.js';
+import { defaultAI } from '../src/lib/agentConfig.js';
+
+function buildAI(provider, apiKey) {
+  if (apiKey) return AIProviderFactory.create(provider || 'gemini', apiKey);
+  return defaultAI('resume'); // agent.yaml active agent
+}
 import dotenv from 'dotenv';
 
 dotenv.config();
@@ -84,9 +90,7 @@ new Worker('hakein-jobs', async (job) => {
     const userDoc = await User.findById(userId).lean();
     if (!userDoc) throw new Error('User not found');
     const user = fmtUser(userDoc);
-    const key = apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-    if (!key) throw new Error('No AI apiKey');
-    const ai = AIProviderFactory.create(provider, key);
+    const ai = buildAI(provider, apiKey);
     const { JobExtractorService } = await import('../src/services/jobExtractor.js');
     const jd = await new JobExtractorService().extractFromUrl(jobUrl);
     const jobRec = await Job.findOneAndUpdate(
@@ -141,9 +145,7 @@ new Worker('hakein-jobs', async (job) => {
     const userDoc = await User.findById(app.userId).lean();
     if (!userDoc) throw new Error('User not found');
     const user = fmtUser(userDoc);
-    const key = apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-    if (!key) throw new Error('No AI apiKey');
-    const ai = AIProviderFactory.create(provider, key);
+    const ai = buildAI(provider, apiKey);
     const prefs = user.preferences || {};
     const credentials = { linkedin: resolveCredentials(user, 'linkedin'), naukri: resolveCredentials(user, 'naukri') };
     const { tailored, outcome } = await runApply({
@@ -195,16 +197,13 @@ new Worker('hakein-jobs', async (job) => {
   const fresh = jobs.filter((j) => !appliedSet.has(String(j.id || j._id))).slice(0, maxApplies);
 
   const results = [];
-  const key = apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
-  if (!key) throw new Error('No AI apiKey provided and no server fallback key set');
+  const ai = buildAI(provider, apiKey);
 
   const credentials = {
     linkedin: resolveCredentials(user, 'linkedin'),
     naukri: resolveCredentials(user, 'naukri')
   };
   const mode = prefs.autoAnswerMode || 'full-auto';
-
-  const ai = AIProviderFactory.create(provider, key);
 
   for (const j of fresh) {
     try {

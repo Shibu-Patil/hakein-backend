@@ -215,3 +215,25 @@ describe('alerts - job link extraction', () => {
     assert.equal(extractJobLinks('Hi, see https://example.com/page for details').length, 0);
   });
 });
+
+describe('agent.yaml - config', () => {
+  it('loads agents and exposes safe listing without keys', async () => {
+    const { loadAgentConfig, listAgents } = await import('../src/lib/agentConfig.js');
+    const cfg = loadAgentConfig();
+    assert.ok(cfg.active);
+    assert.ok(Object.keys(cfg.agents).length >= 1);
+    const listed = JSON.stringify(listAgents());
+    assert.ok(!listed.includes('AIza') || process.env.GEMINI_API_KEY === '');
+  });
+  it('rejects unknown agent names with choices', async () => {
+    const { resolveAgent } = await import('../src/lib/agentConfig.js');
+    assert.throws(() => resolveAgent('no-such-agent'), /Choices:/);
+  });
+  it('factory accepts model override per provider', async () => {
+    const { AIProviderFactory } = await import('../src/services/aiProviders.js');
+    const g = AIProviderFactory.create('gemini', 'k', 'gemini-1.5-flash');
+    assert.equal(g.model, 'gemini-1.5-flash');
+    const o = AIProviderFactory.create('openrouter', 'k', 'x/y');
+    assert.equal(o.model, 'x/y');
+  });
+});

@@ -37,6 +37,11 @@ app.use('/api/jobs', jobsRoutes);
 app.use('/api/applications', applicationsRoutes);
 app.use('/api', inboxRoutes);
 
+app.get('/api/agents', async (_req, res) => {
+  const { listAgents } = await import('./lib/agentConfig.js');
+  res.json(listAgents());
+});
+
 app.get('/', (req, res) => {
   res.json({
     name: 'hakein-backend',
@@ -56,7 +61,8 @@ app.get('/', (req, res) => {
       'GET /api/applications/user/:userId',
       'POST /api/applications/:id/retry',
       'GET /api/users/:id/inbox',
-      'POST /api/users/:id/inbox/:qid/answer'
+      'POST /api/users/:id/inbox/:qid/answer',
+      'GET /api/agents'
     ],
     notes: 'Automation runs server-side. iOS/Windows clients use this HTTP API. Set DATABASE_URL (Mongo Atlas) + REDIS_URL to enable DB/queue.'
   });
