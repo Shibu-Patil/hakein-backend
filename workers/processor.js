@@ -4,7 +4,6 @@ import { connectDb } from '../src/lib/db.js';
 import { User, Job, Application, PendingQuestion } from '../src/models/index.js';
 import { scrapeJobs } from '../src/services/scraperService.js';
 import { ResumeService } from '../src/services/resumeService.js';
-import { AIProviderFactory } from '../src/services/aiProviders.js';
 import { applyToJob } from '../src/services/applicationEngine.js';
 import { resumeTextToPdf } from '../src/services/pdfGenerator.js';
 import { resolveCredentials } from '../src/services/auth.js';
@@ -12,9 +11,8 @@ import { createPendingQuestions } from '../src/services/qaService.js';
 import { notifyUser } from '../src/services/notify.js';
 import { defaultAI } from '../src/lib/agentConfig.js';
 
-function buildAI(provider, apiKey) {
-  if (apiKey) return AIProviderFactory.create(provider || 'gemini', apiKey);
-  return defaultAI('resume'); // agent.yaml active agent
+function buildAI() {
+  return defaultAI('resume'); // keys come only from env via agent.yaml
 }
 import dotenv from 'dotenv';
 

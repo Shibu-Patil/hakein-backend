@@ -28,15 +28,18 @@ export function reloadAgentConfig() {
 }
 
 // Resolve a named agent (or active default) to { name, provider, model, apiKey }.
-// apiKey comes from the env var the entry points at — never stored in yaml.
+// Keys come ONLY from env (via apiKeyEnv). Inline keys in yaml are not supported.
 export function resolveAgent(name) {
   const cfg = loadAgentConfig();
   const agentName = name || cfg.active;
   const entry = cfg.agents[agentName];
   if (!entry) throw new Error(`Unknown agent "${agentName}". Choices: ${Object.keys(cfg.agents).join(', ') || '(none)'}`);
-  const apiKey = entry.apiKey ? String(entry.apiKey) : (entry.apiKeyEnv ? process.env[entry.apiKeyEnv] : undefined);
+  if (!entry.provider || !entry.apiKeyEnv) {
+    throw new Error(`Agent "${agentName}" must set provider + apiKeyEnv in agent.yaml`);
+  }
+  const apiKey = process.env[entry.apiKeyEnv];
   if (!apiKey) {
-    throw new Error(`Agent "${agentName}" needs ${entry.apiKeyEnv || 'an api key'} set in .env`);
+    throw new Error(`Agent "${agentName}" needs ${entry.apiKeyEnv} set in .env`);
   }
   return { name: agentName, provider: entry.provider, model: entry.model, apiKey };
 }
@@ -65,7 +68,7 @@ export function listAgents() {
         {
           provider: e.provider,
           model: e.model,
-          keyConfigured: !!(e.apiKeyEnv && process.env[e.apiKeyEnv]) || !!e.apiKey
+          keyConfigured: !!(e.apiKeyEnv && process.env[e.apiKeyEnv])
         }
       ])
     )

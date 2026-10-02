@@ -204,9 +204,7 @@ usersRoutes.post('/:id/answer-preview', async (req, res, next) => {
     const { defaultAI } = await import('../lib/agentConfig.js');
     let aiProvider = null;
     try {
-      aiProvider = value.apiKey
-        ? (await import('../services/aiProviders.js')).AIProviderFactory.create(value.provider, value.apiKey)
-        : defaultAI('qa');
+      aiProvider = defaultAI('qa'); // keys come only from env via agent.yaml
     } catch {
       aiProvider = null;
     }

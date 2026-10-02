@@ -4,7 +4,6 @@ import rateLimit from 'express-rate-limit';
 import multer from 'multer';
 import { ResumeService } from '../services/resumeService.js';
 import { JobExtractorService } from '../services/jobExtractor.js';
-import { AIProviderFactory } from '../services/aiProviders.js';
 import { resumeTextToPdf } from '../services/pdfGenerator.js';
 import { defaultAI } from '../lib/agentConfig.js';
 
@@ -112,12 +111,10 @@ resumeRoutes.post('/generate', async (req, res, next) => {
       return res.status(400).json({ error: error.details[0].message });
     }
 
-    const { provider, jobInput, options } = value;
+    const { jobInput, options } = value;
     let aiProvider;
     try {
-      aiProvider = value.apiKey
-        ? AIProviderFactory.create(provider || 'gemini', value.apiKey)
-        : defaultAI('resume');
+      aiProvider = defaultAI('resume'); // keys come only from env via agent.yaml
     } catch (e) {
       return res.status(400).json({ error: e.message });
     }
@@ -155,9 +152,7 @@ resumeRoutes.post('/analyze-ats', async (req, res, next) => {
 
     let aiProvider;
     try {
-      aiProvider = req.body.apiKey
-        ? AIProviderFactory.create(req.body.provider || 'gemini', req.body.apiKey)
-        : defaultAI('scoring');
+      aiProvider = defaultAI('scoring'); // keys come only from env via agent.yaml
     } catch (e) {
       return res.status(400).json({ error: e.message });
     }
