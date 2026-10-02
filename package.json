@@ -15,6 +15,7 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
+    "db:seed": "node scripts/seedQa.js",
     "test": "node --test tests/qa.test.js tests/autoApply.test.js"
   },
   "keywords": [
