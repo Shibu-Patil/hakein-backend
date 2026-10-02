@@ -26,7 +26,10 @@ usersRoutes.post('/', async (req, res, next) => {
         roles: Joi.array().items(Joi.string()).default([]),
         autoApply: Joi.boolean().default(false),
         easyApplyOnly: Joi.boolean().default(true),
-        sources: Joi.array().items(Joi.string().valid('linkedin', 'naukri')).default(['linkedin', 'naukri'])
+        sources: Joi.array().items(Joi.string().valid('linkedin', 'naukri')).default(['linkedin', 'naukri']),
+        autoAnswerMode: Joi.string().valid('assisted', 'full-auto').default('assisted'),
+        notifyEmail: Joi.string().email().optional(),
+        notifyTopic: Joi.string().optional()
       }).required(),
       naukriEmail: Joi.string().optional(),
       naukriPassword: Joi.string().optional(),

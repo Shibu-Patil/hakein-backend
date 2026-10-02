@@ -26,6 +26,7 @@ model User {
   applications   Application[]
   qaProfile      Json?
   screeningAnswers ScreeningAnswer[]
+  pendingQuestions PendingQuestion[]
 }
 
 model ScreeningAnswer {
@@ -82,6 +83,24 @@ model Application {
   job         Job       @relation(fields: [jobId], references: [id], onDelete: Cascade)
 
   @@unique([userId, jobId])
+}
+
+model PendingQuestion {
+  id            String    @id @default(auto()) @map("_id") @db.ObjectId
+  userId        String    @db.ObjectId
+  jobId         String?   @db.ObjectId
+  applicationId String?   @db.ObjectId
+  source        String    @default("linkedin")
+  question      String
+  questionNorm  String
+  fieldType     String    @default("text")
+  options       Json?
+  status        String    @default("pending")
+  answer        String?
+  expiresAt     DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model ScrapingLog {

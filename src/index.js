@@ -8,6 +8,7 @@ import { healthRoutes } from './routes/health.js';
 import { usersRoutes } from './routes/users.js';
 import { jobsRoutes } from './routes/jobs.js';
 import { applicationsRoutes } from './routes/applications.js';
+import { inboxRoutes } from './routes/inbox.js';
 
 dotenv.config();
 
@@ -34,6 +35,7 @@ app.use('/api/resume', resumeRoutes);
 app.use('/api/users', usersRoutes);
 app.use('/api/jobs', jobsRoutes);
 app.use('/api/applications', applicationsRoutes);
+app.use('/api', inboxRoutes);
 
 app.get('/', (req, res) => {
   res.json({
@@ -51,7 +53,10 @@ app.get('/', (req, res) => {
       'GET /api/jobs',
       'GET /api/jobs/matches/:userId',
       'POST /api/applications/auto-apply',
-      'GET /api/applications/user/:userId'
+      'GET /api/applications/user/:userId',
+      'POST /api/applications/:id/retry',
+      'GET /api/users/:id/inbox',
+      'POST /api/users/:id/inbox/:qid/answer'
     ],
     notes: 'Automation runs server-side. iOS/Windows clients use this HTTP API. Set DATABASE_URL (Mongo Atlas) + REDIS_URL to enable DB/queue.'
   });

@@ -5,6 +5,7 @@ import {
   isSensitive,
   matchQaProfile,
   coerceToOptions,
+  closestOptionFallback,
   llmAnswer,
   answerQuestion
 } from '../src/services/qaService.js';
@@ -127,5 +128,56 @@ describe('qa - answerQuestion priority (no DB)', () => {
     });
     assert.equal(r.answer, null);
     assert.equal(r.error, 'sensitive-no-stored-answer');
+  });
+});
+
+describe('qa - full-auto mode', () => {
+  it('closestOptionFallback picks overlapping option', () => {
+    assert.equal(closestOptionFallback('I need sponsorship for work', ['Yes', 'No']), null);
+    assert.equal(
+      closestOptionFallback('Immediate joiner, 0 days notice', ['Immediate joiner', '30 days', '60 days']),
+      'Immediate joiner'
+    );
+  });
+  it('full-auto answers sensitive questions via llm instead of refusing', async () => {
+    const r = await answerQuestion({
+      userId: null,
+      user: { qaProfile: {}, profile: {}, preferences: { autoAnswerMode: 'full-auto' } },
+      question: 'Do you have a disability?',
+      fieldType: 'radio',
+      options: ['Yes', 'No'],
+      job: '',
+      resumeText: 'No disabilities declared',
+      aiProvider: fakeAI('{"answer":"No","confidence":"high"}')
+    });
+    assert.equal(r.answer, 'No');
+  });
+  it('full-auto salvages option mismatch via fallback', async () => {
+    const r = await answerQuestion({
+      userId: null,
+      user: { qaProfile: {}, profile: {} },
+      question: 'Notice period?',
+      fieldType: 'select',
+      options: ['Immediate joiner', '30 days', '60 days'],
+      job: '',
+      resumeText: 'Serving notice, can join in 30 days',
+      mode: 'full-auto',
+      aiProvider: fakeAI('{"answer":"I can join in thirty days time","confidence":"medium"}')
+    });
+    assert.equal(r.answer, '30 days');
+    assert.equal(r.source, 'llm-guess');
+  });
+  it('assisted mode still refuses the same mismatch', async () => {
+    const r = await answerQuestion({
+      userId: null,
+      user: { qaProfile: {}, profile: {} },
+      question: 'Notice period?',
+      fieldType: 'select',
+      options: ['Immediate joiner', '30 days', '60 days'],
+      job: '',
+      resumeText: '',
+      aiProvider: fakeAI('{"answer":"sometime soon","confidence":"low"}')
+    });
+    assert.equal(r.answer, null);
   });
 });

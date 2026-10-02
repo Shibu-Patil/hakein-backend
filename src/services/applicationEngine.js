@@ -112,7 +112,7 @@ export async function answerLinkedInModal(page, answerCtx) {
       await fill(r.answer);
       answered.push({ question, answer: r.answer, source: r.source });
     } else {
-      unanswered.push({ question, reason: r.error || 'no-answer' });
+      unanswered.push({ question, fieldType: kind, options, reason: r.error || 'no-answer' });
     }
   }
 
@@ -216,7 +216,8 @@ export async function applyLinkedInEasyApply(page, { job, resumePdfBuffer, userN
         success: false,
         needsReview: true,
         error: `Unanswered questions: ${unanswered.map((u) => `${u.question} (${u.reason})`).join('; ').slice(0, 400)}`,
-        answersUsed: allAnswered
+        answersUsed: allAnswered,
+        unanswered
       };
     }
     const clicked = await clickButtonByName(page, [/^next/i, /review/i, /continue/i]);
@@ -229,7 +230,8 @@ export async function applyLinkedInEasyApply(page, { job, resumePdfBuffer, userN
       success: false,
       needsReview: true,
       error: `Unanswered questions: ${final.unanswered.map((u) => `${u.question} (${u.reason})`).join('; ').slice(0, 400)}`,
-      answersUsed: allAnswered
+      answersUsed: allAnswered,
+      unanswered: final.unanswered
     };
   }
   const submit = page.getByRole('button', { name: /^submit application/i }).first();
@@ -292,7 +294,7 @@ export async function applyNaukriDirect(page, { job, answerCtx }) {
       // eslint-disable-next-line no-await-in-loop
       const r = await answerQuestion({ ...answerCtx, question: q, fieldType: options.length ? 'radio' : 'text', options });
       if (!r.answer) {
-        return { success: false, needsReview: true, error: `Naukri question unanswered: ${q.slice(0, 200)} (${r.error})`, answersUsed: answered };
+        return { success: false, needsReview: true, error: `Naukri question unanswered: ${q.slice(0, 200)} (${r.error})`, answersUsed: answered, unanswered: [{ question: q, fieldType: options.length ? 'radio' : 'text', options, reason: r.error }] };
       }
       if (options.length) {
         let clicked = false;

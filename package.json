@@ -43,6 +43,7 @@
     "ioredis": "^5.11.1",
     "joi": "^17.13.3",
     "node-cron": "^3.0.3",
+    "nodemailer": "^6.10.1",
     "pdf-parse": "^1.1.1",
     "pdfkit": "^0.15.2",
     "playwright": "^1.63.0",
