@@ -64,9 +64,17 @@ new Worker('hakein-jobs', async (job) => {
         continue;
       }
 
-      // 4. Real apply via Playwright with id/password (server-side)
+      // 4. Real apply via Playwright with id/password (server-side).
+      // Screening questions are auto-answered from stored Q&A -> qaProfile -> LLM(resume+JD).
       const pdf = await resumeTextToPdf({ name: user.profile?.name || user.name || 'Resume', resumeText: tailored.resume });
-      const outcome = await applyToJob({ job: j, resumePdfBuffer: pdf, user, credentials });
+      const outcome = await applyToJob({
+        job: j,
+        resumePdfBuffer: pdf,
+        resumeText: tailored.resume,
+        user,
+        credentials,
+        answerCtx: { userId, user, job: j, resumeText: tailored.resume, aiProvider: ai }
+      });
       const status = outcome.success ? 'applied' : (outcome.needsReview ? 'needs_review' : (outcome.skipped ? 'skipped' : 'failed'));
       const app = await prisma.application.create({
         data: {
@@ -74,11 +82,12 @@ new Worker('hakein-jobs', async (job) => {
           status,
           resumeUsed: tailored.resume.slice(0, 15000),
           response: outcome.response || {},
+          answersUsed: outcome.answersUsed || null,
           error: outcome.error || null,
           appliedAt: outcome.success ? new Date() : null
         }
       });
-      results.push({ jobId: j.id, title: j.title, source: j.source, applied: outcome.success, status, applicationId: app.id, error: outcome.error });
+      results.push({ jobId: j.id, title: j.title, source: j.source, applied: outcome.success, status, applicationId: app.id, error: outcome.error, answersUsed: outcome.answersUsed });
     } catch (e) {
       results.push({ jobId: j.id, title: j.title, source: j.source, applied: false, error: e.message?.slice(0, 300) });
     }

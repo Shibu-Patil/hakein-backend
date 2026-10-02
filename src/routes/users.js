@@ -114,6 +114,95 @@ usersRoutes.post('/:id/verify-credentials', async (req, res, next) => {
   } catch (e) { next(e); }
 });
 
+usersRoutes.patch('/:id/qa-profile', async (req, res, next) => {
+  try {
+    if (!dbReady(res)) return;
+    const schema = Joi.object({
+      workAuth: Joi.string().optional(),
+      sponsorship: Joi.string().optional(),
+      noticeDays: Joi.alternatives().try(Joi.number(), Joi.string()).optional(),
+      ctc: Joi.string().optional(),
+      expectedCtc: Joi.string().optional(),
+      relocation: Joi.string().optional(),
+      remote: Joi.string().optional(),
+      languages: Joi.array().items(Joi.string()).optional(),
+      experienceYears: Joi.alternatives().try(Joi.number(), Joi.string()).optional(),
+      location: Joi.string().optional(),
+      dob: Joi.string().optional(),
+      gender: Joi.string().optional()
+    }).min(1).unknown(true);
+    const { error, value } = schema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+    const existing = await prisma.user.findUnique({ where: { id: req.params.id }, select: { qaProfile: true } });
+    if (!existing) return res.status(404).json({ error: 'User not found' });
+    const merged = { ...(existing.qaProfile || {}), ...value };
+    await prisma.user.update({ where: { id: req.params.id }, data: { qaProfile: merged } });
+    res.json({ ok: true, qaProfile: merged });
+  } catch (e) { next(e); }
+});
+
+usersRoutes.post('/:id/qa', async (req, res, next) => {
+  try {
+    if (!dbReady(res)) return;
+    const schema = Joi.object({
+      question: Joi.string().required(),
+      answer: Joi.string().required(),
+      source: Joi.string().default('manual')
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+    const { saveQaPair } = await import('../services/qaService.js');
+    const rec = await saveQaPair({ userId: req.params.id, ...value });
+    res.json({ ok: true, id: rec.id });
+  } catch (e) { next(e); }
+});
+
+usersRoutes.get('/:id/qa', async (req, res, next) => {
+  try {
+    if (!dbReady(res)) return;
+    const [user, answers] = await Promise.all([
+      prisma.user.findUnique({ where: { id: req.params.id }, select: { qaProfile: true } }),
+      prisma.screeningAnswer.findMany({ where: { userId: req.params.id }, orderBy: { updatedAt: 'desc' }, take: 200 })
+    ]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ qaProfile: user.qaProfile || {}, answers });
+  } catch (e) { next(e); }
+});
+
+// Preview how a question would be answered (stored -> qaProfile -> LLM), without applying.
+usersRoutes.post('/:id/answer-preview', async (req, res, next) => {
+  try {
+    if (!dbReady(res)) return;
+    const schema = Joi.object({
+      question: Joi.string().required(),
+      fieldType: Joi.string().valid('text', 'textarea', 'select', 'radio').default('text'),
+      options: Joi.array().items(Joi.string()).default([]),
+      jobDescription: Joi.string().optional(),
+      provider: Joi.string().valid('gemini', 'openai', 'anthropic').default('gemini'),
+      apiKey: Joi.string().optional()
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+    const user = await prisma.user.findUnique({ where: { id: req.params.id } });
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const { answerQuestion } = await import('../services/qaService.js');
+    let aiProvider = null;
+    const key = value.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+    if (key) {
+      const { AIProviderFactory } = await import('../services/aiProviders.js');
+      aiProvider = AIProviderFactory.create(value.provider, key);
+    }
+    const profile = user.profile || {};
+    const resumeText = [profile.summary, JSON.stringify(profile.experience || []), JSON.stringify(profile.skills || {})].join('\n').slice(0, 6000);
+    const result = await answerQuestion({
+      userId: user.id, user,
+      question: value.question, fieldType: value.fieldType, options: value.options,
+      job: value.jobDescription || '', resumeText, aiProvider
+    });
+    res.json(result);
+  } catch (e) { next(e); }
+});
+
 usersRoutes.patch('/:id/preferences', async (req, res, next) => {
   try {
     if (!dbReady(res)) return;

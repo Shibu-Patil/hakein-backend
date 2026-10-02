@@ -15,7 +15,7 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate dev",
     "db:studio": "prisma studio",
-    "test": "node --test tests/autoApply.test.js"
+    "test": "node --test tests/qa.test.js tests/autoApply.test.js"
   },
   "keywords": [
     "resume",
