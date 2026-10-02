@@ -42,3 +42,49 @@ async function tick() {
 cron.schedule(EVERY, tick);
 console.log(`[scheduler] running with cron "${EVERY}". Live apply by default; set AUTO_APPLY_LIVE=false for dry-run.`);
 tick();
+
+// Instant lane: Gmail job-alert ingest every few minutes (your own mailbox = zero ban risk).
+// Turn ON job-alert emails: LinkedIn > Jobs > Job alerts > email on; Naukri > alerts on.
+const ALERT_EVERY = process.env.ALERT_CRON || '*/3 * * * *';
+
+async function alertTick() {
+  try {
+    if (!dbConfigured()) return;
+    const redis = getRedis();
+    if (!redis) return;
+    const { fetchAlertLinks } = await import('../src/services/alertIngest.js');
+    const { Job } = await import('../src/models/index.js');
+    const { links } = await fetchAlertLinks({ max: 20 });
+    if (!links?.length) return;
+    await connectDb();
+    const users = await User.find({}).limit(500).lean();
+    const auto = users.filter((u) => u.preferences?.autoApply);
+    if (!auto.length) return;
+    const queue = new Queue('hakein-jobs', { connection: redis });
+    let queued = 0;
+    for (const link of links) {
+      const exists = await Job.findOne({ source: link.source, externalId: link.externalId }).lean();
+      if (exists) continue;
+      for (const u of auto) {
+        await queue.add('instant-apply', {
+          userId: String(u._id),
+          jobUrl: link.url,
+          source: link.source,
+          externalId: link.externalId,
+          titleHint: (link.subject || '').replace(/^(re:\s*)?(\d+\s+new\s+jobs?\s+(for|:)[:\s]*)/i, '').slice(0, 200),
+          provider: 'gemini',
+          dryRun: process.env.AUTO_APPLY_LIVE === 'false'
+        });
+        queued++;
+      }
+    }
+    await queue.close();
+    if (queued) console.log(`[scheduler] instant-apply queued ${queued} jobs from alerts`);
+  } catch (e) {
+    console.error('[scheduler] alert tick failed:', e.message);
+  }
+}
+
+cron.schedule(ALERT_EVERY, alertTick);
+console.log(`[scheduler] alert ingest every "${ALERT_EVERY}" (needs GMAIL_USER + GMAIL_APP_PASSWORD + job-alert emails ON).`);
+alertTick();

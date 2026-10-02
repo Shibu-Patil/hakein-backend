@@ -78,6 +78,62 @@ async function handleNeedsReview({ user, job, app, outcome }) {
 new Worker('hakein-jobs', async (job) => {
   await connectDb();
 
+  // Instant apply: one job URL pushed from Gmail job alerts (minutes after landing).
+  if (job.name === 'instant-apply') {
+    const { userId, jobUrl, source, externalId, titleHint, provider = 'gemini', apiKey, dryRun = false } = job.data;
+    const userDoc = await User.findById(userId).lean();
+    if (!userDoc) throw new Error('User not found');
+    const user = fmtUser(userDoc);
+    const key = apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+    if (!key) throw new Error('No AI apiKey');
+    const ai = AIProviderFactory.create(provider, key);
+    const { JobExtractorService } = await import('../src/services/jobExtractor.js');
+    const jd = await new JobExtractorService().extractFromUrl(jobUrl);
+    const jobRec = await Job.findOneAndUpdate(
+      { source, externalId: String(externalId).slice(0, 200) },
+      {
+        $setOnInsert: {
+          source,
+          externalId: String(externalId).slice(0, 200),
+          title: String(titleHint || jd.split('\n')[0] || 'Alert job').slice(0, 300),
+          company: 'via job alert',
+          location: (user.preferences?.locations || ['India'])[0],
+          url: jobUrl.slice(0, 1000),
+          description: jd.slice(0, 15000),
+          postedAt: new Date(),
+          rawData: { via: 'gmail-alert' }
+        }
+      },
+      { upsert: true, new: true }
+    ).lean();
+    const j = { ...jobRec, id: String(jobRec._id) };
+    const tailored = await resumeService.generateTailoredResume(user.profile, j.description, ai, { format: 'ats' });
+    if (dryRun) {
+      const app = await Application.create({
+        userId: user._id, jobId: jobRec._id, status: 'pending',
+        resumeUsed: tailored.resume.slice(0, 15000),
+        response: { dryRun: true, instant: true, atsScore: tailored.atsScore }
+      });
+      return { instant: true, dryRun: true, applicationId: String(app._id), title: j.title };
+    }
+    const credentials = { linkedin: resolveCredentials(user, 'linkedin'), naukri: resolveCredentials(user, 'naukri') };
+    const mode = (user.preferences || {}).autoAnswerMode || 'full-auto';
+    const pdf = await resumeTextToPdf({ name: user.profile?.name || user.name || 'Resume', resumeText: tailored.resume });
+    const outcome = await applyToJob({
+      job: j,
+      resumePdfBuffer: pdf,
+      resumeText: tailored.resume,
+      user: { ...user, preferences: { ...(user.preferences || {}), autoAnswerMode: mode } },
+      credentials,
+      answerCtx: { userId: user.id, user, job: j, resumeText: tailored.resume, aiProvider: ai, mode }
+    });
+    const app = await saveApplication({ userId: user._id, jobId: jobRec._id, tailored, outcome });
+    if (outcome.needsReview) {
+      await handleNeedsReview({ user, job: j, app, outcome });
+    }
+    return { instant: true, applied: outcome.success, status: app.status, applicationId: String(app._id), title: j.title };
+  }
+
   if (job.name === 'retry-apply') {
     const { applicationId, provider = 'gemini', apiKey } = job.data;
     const app = await Application.findById(applicationId).populate('job').lean();

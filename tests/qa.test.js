@@ -195,3 +195,23 @@ describe('qa - full-auto mode', () => {
     assert.equal(r.answer, null);
   });
 });
+
+describe('alerts - job link extraction', () => {
+  it('extracts LinkedIn job links', async () => {
+    const { extractJobLinks } = await import('../src/services/alertIngest.js');
+    const out = extractJobLinks('New job https://www.linkedin.com/comm/jobs/view/1234567890/?refId=abc and again https://www.linkedin.com/jobs/view/1234567890/');
+    assert.equal(out.length, 1);
+    assert.equal(out[0].source, 'linkedin');
+    assert.equal(out[0].externalId, '1234567890');
+  });
+  it('extracts Naukri job links', async () => {
+    const { extractJobLinks } = await import('../src/services/alertIngest.js');
+    const out = extractJobLinks('Apply https://www.naukri.com/job-listings-react-developer-abc-12345678?src=test');
+    assert.equal(out.length, 1);
+    assert.equal(out[0].source, 'naukri');
+  });
+  it('ignores non-job links', async () => {
+    const { extractJobLinks } = await import('../src/services/alertIngest.js');
+    assert.equal(extractJobLinks('Hi, see https://example.com/page for details').length, 0);
+  });
+});
