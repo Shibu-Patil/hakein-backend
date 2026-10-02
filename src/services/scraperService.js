@@ -18,7 +18,25 @@ function fmtJob(doc) {
   return o;
 }
 
-const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36';
+const UA_POOL = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:127.0) Gecko/20100101 Firefox/127.0'
+];
+function pickUA() {
+  return UA_POOL[Math.floor(Math.random() * UA_POOL.length)];
+}
+
+// Human-like pause between requests (1.5–3s). Never hammer: ban safety first.
+function politeWait() {
+  const ms = 1500 + Math.random() * 1500;
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+function isRateLimited(err) {
+  const s = err?.response?.status;
+  return s === 429 || s === 403;
+}
 
 function hoursAgo(h) { return new Date(Date.now() - h * 60 * 60 * 1000); }
 
@@ -37,7 +55,7 @@ async function scrapeLinkedIn({ keywords, locations, hoursBack, maxJobs }) {
   const loc = encodeURIComponent((locations && locations[0]) || 'India');
   const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${kw}&location=${loc}&f_TPR=r${Math.min(Math.max(hoursBack, 1), 24 * 7)}&start=0`;
 
-  const { data: html } = await axios.get(url, { headers: { 'User-Agent': UA }, timeout: 15000 });
+  const { data: html } = await axios.get(url, { headers: { 'User-Agent': pickUA() }, timeout: 15000 });
   const $ = cheerio.load(html);
   const cards = $('li').slice(0, maxJobs);
 
@@ -51,13 +69,16 @@ async function scrapeLinkedIn({ keywords, locations, hoursBack, maxJobs }) {
       if (!title || !detailUrl) continue;
       const idMatch = detailUrl.match(/(\d{6,})/);
       const externalId = idMatch ? idMatch[1] : detailUrl;
-      // Fetch JD detail (guest page)
+      // Fetch JD detail (guest page, no login = looks like normal browsing)
       let description = '';
       try {
-        const d = await axios.get(detailUrl, { headers: { 'User-Agent': UA }, timeout: 15000 });
+        const d = await axios.get(detailUrl, { headers: { 'User-Agent': pickUA() }, timeout: 15000 });
         const $$ = cheerio.load(d.data);
         description = $$('.description__text, .show-more-less-html__markup').first().text().trim().replace(/\s+/g, ' ').slice(0, 15000);
-      } catch { description = `${title} at ${company}`; }
+      } catch (e) {
+        if (isRateLimited(e)) return jobs; // back off immediately, keep what we have
+        description = `${title} at ${company}`;
+      }
       jobs.push({
         source: 'linkedin',
         externalId,
@@ -67,7 +88,7 @@ async function scrapeLinkedIn({ keywords, locations, hoursBack, maxJobs }) {
         postedAt: new Date(),
         rawData: { via: 'guest-api' }
       });
-      await new Promise((r) => setTimeout(r, 800));
+      await politeWait();
     } catch { /* skip bad card */ }
   }
   return jobs;
@@ -79,7 +100,7 @@ async function scrapeNaukri({ keywords, locations, hoursBack, maxJobs }) {
   const kw = encodeURIComponent((keywords || ['software engineer']).join(' '));
   const url = `https://www.naukri.com/${kw.replace(/%20/g, '-')}-jobs?k=${kw}&experience=0`;
   try {
-    const { data: html } = await axios.get(url, { headers: { 'User-Agent': UA }, timeout: 15000 });
+    const { data: html } = await axios.get(url, { headers: { 'User-Agent': pickUA() }, timeout: 15000 });
     const $ = cheerio.load(html);
     // Naukri embeds JSON in __NEXT_DATA__
     const nextData = $('#__NEXT_DATA__').html();
