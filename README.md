@@ -168,3 +168,9 @@ tests/qa.test.js + autoApply.test.js   `npm test` (no DB/browser needed; live-lo
 npm test   # node --test: credential resolution, blocker detection, Q&A incl. full-auto, API validation
 ```
 Live browser login test runs only when `LINKEDIN_*`/`NAUKRI_*` env creds exist **and** `npx playwright install chromium` was run.
+
+
+
+<!-- npm start          # API → http://localhost:3000
+npm run worker     # apply worker
+npm run scheduler  # 30-min watch + 3-min Gmail alert lane -->

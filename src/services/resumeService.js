@@ -1,6 +1,25 @@
 import { v4 as uuidv4 } from 'uuid';
 
 export class ResumeService {
+  // Public flow: raw resume text -> structured profile -> normal tailored pipeline.
+  // No login, no saved profile needed.
+  async tailorFromResumeText(resumeText, jobDescription, aiProvider, options = {}) {
+    const userProfile = await this.parseResumeText(resumeText, aiProvider);
+    return this.generateTailoredResume(userProfile, jobDescription, aiProvider, options);
+  }
+
+  async parseResumeText(resumeText, aiProvider) {
+    const prompt = `Extract this resume into structured JSON. Keep every employer, role, date, bullet, skill, school, and project. Do not invent anything missing.
+
+RESUME:
+${String(resumeText).slice(0, 12000)}
+
+Return ONLY JSON:
+{"name":"","email":"","phone":"","location":"","linkedin":"","github":"","summary":"","experience":[{"company":"","role":"","startDate":"","endDate":"","description":[""],"technologies":[""]}],"education":[{"institution":"","degree":"","field":"","graduationDate":""}],"skills":{"technical":[""],"soft":[],"tools":[]},"projects":[],"certifications":[]}`;
+    const response = await aiProvider.generate(prompt);
+    return this.parseJSON(response);
+  }
+
   async generateTailoredResume(userProfile, jobDescription, aiProvider, options = {}) {
     const analysis = await this.analyzeJobDescription(jobDescription, aiProvider);
     const tailoredContent = await this.generateTailoredContent(

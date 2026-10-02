@@ -1,8 +1,16 @@
 import { Router } from 'express';
 import Joi from 'joi';
+import rateLimit from 'express-rate-limit';
 import { ResumeService } from '../services/resumeService.js';
 import { JobExtractorService } from '../services/jobExtractor.js';
 import { AIProviderFactory } from '../services/aiProviders.js';
+
+// Public endpoint burns the server key: 10 tailors/hour per IP.
+const publicLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  message: { error: 'Public limit reached (10/hour). Setup an account for unlimited use.' }
+});
 
 export const resumeRoutes = Router();
 
@@ -122,6 +130,38 @@ resumeRoutes.post('/analyze-ats', async (req, res, next) => {
     );
     const analysis = await resumeService.analyzeATS(value.resume, value.jobDescription, aiProvider);
     res.json(analysis);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUBLIC: no login. Paste resume text + JD (or job link) -> tailored ATS resume.
+// Uses the server key; strict rate limit guards abuse.
+resumeRoutes.post('/tailor-public', publicLimiter, async (req, res, next) => {
+  try {
+    const schema = Joi.object({
+      resumeText: Joi.string().min(50).max(20000).required(),
+      jobInput: Joi.alternatives().try(
+        Joi.object({ type: Joi.string().valid('jd').required(), content: Joi.string().min(50).max(20000).required() }),
+        Joi.object({ type: Joi.string().valid('url').required(), url: Joi.string().uri().required() })
+      ).required()
+    });
+    const { error, value } = schema.validate(req.body);
+    if (error) return res.status(400).json({ error: error.details[0].message });
+
+    const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'Server AI key not configured.' });
+
+    let jobDescription;
+    if (value.jobInput.type === 'url') {
+      jobDescription = await jobExtractor.extractFromUrl(value.jobInput.url);
+    } else {
+      jobDescription = value.jobInput.content;
+    }
+
+    const aiProvider = AIProviderFactory.create(process.env.RESUME_PROVIDER || 'gemini', apiKey);
+    const result = await resumeService.tailorFromResumeText(value.resumeText, jobDescription, aiProvider, { format: 'ats' });
+    res.json(result);
   } catch (err) {
     next(err);
   }
