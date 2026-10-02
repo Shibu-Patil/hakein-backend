@@ -30,6 +30,15 @@ class BaseProvider {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Guard: no model call may hang forever. 60s per attempt, then retry/next.
+function withTimeout(promise, ms = 60000) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`Model timeout after ${ms / 1000}s (no response)`)), ms);
+  });
+  return Promise.race([promise.finally(() => clearTimeout(timer)), timeout]);
+}
+
 function isTransient(err) {
   return /503|overloaded|high demand|Service Unavailable|429|rate limit|timeout|ETIMEDOUT|ECONNRESET|500|fetch failed|network|socket|hang up|EAI_AGAIN|ENOTFOUND/i.test(String(err?.message || err));
 }
@@ -48,7 +57,7 @@ class GeminiProvider extends BaseProvider {
     for (const wait of [0, 3000, 8000]) {
       if (wait) await sleep(wait);
       try {
-        result = await this.generativeModel.generateContent(prompt);
+        result = await withTimeout(this.generativeModel.generateContent(prompt));
         lastErr = null;
         break;
       } catch (e) {
