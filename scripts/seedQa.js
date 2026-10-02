@@ -44,28 +44,31 @@ if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('<username>')
   process.exit(1);
 }
 
-const { prisma } = await import('../src/lib/prisma.js');
+const { connectDb } = await import('../src/lib/db.js');
+const { User, ScreeningAnswer } = await import('../src/models/index.js');
 const { normalizeQuestion } = await import('../src/services/qaService.js');
 
-const user = await prisma.user.findUnique({ where: { email } });
+await connectDb();
+
+const user = await User.findOne({ email }).lean();
 if (!user) {
   console.error(`No user with email ${email}. Create one first: POST /api/users`);
   process.exit(1);
 }
 
 const merged = { ...(user.qaProfile || {}), ...Object.fromEntries(Object.entries(qaProfile).filter(([, v]) => String(v ?? '').trim() !== '')) };
-await prisma.user.update({ where: { id: user.id }, data: { qaProfile: merged } });
+await User.findByIdAndUpdate(user._id, { $set: { qaProfile: merged } });
 console.log(`[seed] qaProfile merged (${Object.keys(merged).length} keys)`);
 
 let saved = 0;
 for (const a of answers) {
   const norm = normalizeQuestion(a.question);
-  await prisma.screeningAnswer.upsert({
-    where: { userId_questionNorm: { userId: user.id, questionNorm: norm } },
-    update: { answer: String(a.answer), question: String(a.question).slice(0, 500), source: 'seed' },
-    create: { userId: user.id, questionNorm: norm, question: String(a.question).slice(0, 500), answer: String(a.answer), source: 'seed' }
-  });
+  await ScreeningAnswer.findOneAndUpdate(
+    { userId: user._id, questionNorm: norm },
+    { $set: { answer: String(a.answer), question: String(a.question).slice(0, 500), source: 'seed' } },
+    { upsert: true }
+  );
   saved++;
 }
 console.log(`[seed] saved ${saved} screening answers for ${email}`);
-await prisma.$disconnect();
+process.exit(0);

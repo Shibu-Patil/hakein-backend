@@ -1,16 +1,22 @@
 import { Router } from 'express';
 import Joi from 'joi';
-import { prisma } from '../lib/prisma.js';
+import { connectDb, dbReady } from '../lib/db.js';
+import { User, Application, ScreeningAnswer } from '../models/index.js';
 import { encrypt } from '../lib/crypto.js';
 
 export const usersRoutes = Router();
 
-function dbReady(res) {
-  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('<username>')) {
-    res.status(503).json({ error: 'DATABASE_URL (Mongo Atlas) not configured. Set it in .env' });
-    return false;
-  }
-  return true;
+function fmt(doc) {
+  if (!doc) return doc;
+  const o = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc };
+  o.id = String(o._id);
+  return o;
+}
+
+function maskCreds(u) {
+  if (u.naukriPassword) u.naukriPassword = '***';
+  if (u.linkedinPassword) u.linkedinPassword = '***';
+  return u;
 }
 
 usersRoutes.post('/', async (req, res, next) => {
@@ -50,26 +56,27 @@ usersRoutes.post('/', async (req, res, next) => {
     if (value.linkedinEmail) data.linkedinEmail = value.linkedinEmail;
     if (value.linkedinPassword) data.linkedinPassword = encrypt(value.linkedinPassword);
 
-    const user = await prisma.user.upsert({
-      where: { email: value.email },
-      update: data,
-      create: data
-    });
-    res.json({ id: user.id, email: user.email });
+    await connectDb();
+    const user = await User.findOneAndUpdate(
+      { email: value.email },
+      { $set: data },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    res.json({ id: String(user._id), email: user.email });
   } catch (e) { next(e); }
 });
 
 usersRoutes.get('/:id', async (req, res, next) => {
   try {
     if (!dbReady(res)) return;
-    const user = await prisma.user.findUnique({
-      where: { id: req.params.id },
-      include: { applications: { take: 20, orderBy: { createdAt: 'desc' } } }
-    });
+    await connectDb();
+    const user = await User.findById(req.params.id).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
-    if (user.naukriPassword) user.naukriPassword = '***';
-    if (user.linkedinPassword) user.linkedinPassword = '***';
-    res.json(user);
+    const applications = await Application.find({ userId: user._id })
+      .sort({ createdAt: -1 })
+      .limit(20)
+      .lean();
+    res.json(maskCreds({ ...fmt(user), applications: applications.map(fmt) }));
   } catch (e) { next(e); }
 });
 
@@ -89,7 +96,8 @@ usersRoutes.patch('/:id/credentials', async (req, res, next) => {
     if (value.linkedinPassword) data.linkedinPassword = encrypt(value.linkedinPassword);
     if (value.naukriEmail) data.naukriEmail = value.naukriEmail;
     if (value.naukriPassword) data.naukriPassword = encrypt(value.naukriPassword);
-    await prisma.user.update({ where: { id: req.params.id }, data });
+    await connectDb();
+    await User.findByIdAndUpdate(req.params.id, { $set: data });
     res.json({ ok: true, message: 'Credentials saved (encrypted). Passwords are never returned.' });
   } catch (e) { next(e); }
 });
@@ -106,7 +114,8 @@ usersRoutes.post('/:id/verify-credentials', async (req, res, next) => {
     if (error) return res.status(400).json({ error: error.details[0].message });
     const { verifyCredentials } = await import('../services/applicationEngine.js');
     const { resolveCredentials } = await import('../services/auth.js');
-    const user = await prisma.user.findUnique({ where: { id: req.params.id } });
+    await connectDb();
+    const user = await User.findById(req.params.id).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
     const creds = (value.email && value.password)
       ? { email: value.email, password: value.password }
@@ -136,10 +145,11 @@ usersRoutes.patch('/:id/qa-profile', async (req, res, next) => {
     }).min(1).unknown(true);
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
-    const existing = await prisma.user.findUnique({ where: { id: req.params.id }, select: { qaProfile: true } });
+    await connectDb();
+    const existing = await User.findById(req.params.id).lean();
     if (!existing) return res.status(404).json({ error: 'User not found' });
     const merged = { ...(existing.qaProfile || {}), ...value };
-    await prisma.user.update({ where: { id: req.params.id }, data: { qaProfile: merged } });
+    await User.findByIdAndUpdate(req.params.id, { $set: { qaProfile: merged } });
     res.json({ ok: true, qaProfile: merged });
   } catch (e) { next(e); }
 });
@@ -156,19 +166,20 @@ usersRoutes.post('/:id/qa', async (req, res, next) => {
     if (error) return res.status(400).json({ error: error.details[0].message });
     const { saveQaPair } = await import('../services/qaService.js');
     const rec = await saveQaPair({ userId: req.params.id, ...value });
-    res.json({ ok: true, id: rec.id });
+    res.json({ ok: true, id: String(rec._id) });
   } catch (e) { next(e); }
 });
 
 usersRoutes.get('/:id/qa', async (req, res, next) => {
   try {
     if (!dbReady(res)) return;
+    await connectDb();
     const [user, answers] = await Promise.all([
-      prisma.user.findUnique({ where: { id: req.params.id }, select: { qaProfile: true } }),
-      prisma.screeningAnswer.findMany({ where: { userId: req.params.id }, orderBy: { updatedAt: 'desc' }, take: 200 })
+      User.findById(req.params.id).lean(),
+      ScreeningAnswer.find({ userId: req.params.id }).sort({ updatedAt: -1 }).limit(200).lean()
     ]);
     if (!user) return res.status(404).json({ error: 'User not found' });
-    res.json({ qaProfile: user.qaProfile || {}, answers });
+    res.json({ qaProfile: user.qaProfile || {}, answers: answers.map(fmt) });
   } catch (e) { next(e); }
 });
 
@@ -186,7 +197,8 @@ usersRoutes.post('/:id/answer-preview', async (req, res, next) => {
     });
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
-    const user = await prisma.user.findUnique({ where: { id: req.params.id } });
+    await connectDb();
+    const user = await User.findById(req.params.id).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
     const { answerQuestion } = await import('../services/qaService.js');
     let aiProvider = null;
@@ -198,7 +210,7 @@ usersRoutes.post('/:id/answer-preview', async (req, res, next) => {
     const profile = user.profile || {};
     const resumeText = [profile.summary, JSON.stringify(profile.experience || []), JSON.stringify(profile.skills || {})].join('\n').slice(0, 6000);
     const result = await answerQuestion({
-      userId: user.id, user,
+      userId: String(user._id), user: fmt(user),
       question: value.question, fieldType: value.fieldType, options: value.options,
       job: value.jobDescription || '', resumeText, aiProvider
     });
@@ -209,10 +221,13 @@ usersRoutes.post('/:id/answer-preview', async (req, res, next) => {
 usersRoutes.patch('/:id/preferences', async (req, res, next) => {
   try {
     if (!dbReady(res)) return;
-    const user = await prisma.user.update({
-      where: { id: req.params.id },
-      data: { preferences: req.body }
-    });
-    res.json({ id: user.id, preferences: user.preferences });
+    await connectDb();
+    const user = await User.findByIdAndUpdate(
+      req.params.id,
+      { $set: { preferences: req.body } },
+      { new: true }
+    ).lean();
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ id: String(user._id), preferences: user.preferences });
   } catch (e) { next(e); }
 });

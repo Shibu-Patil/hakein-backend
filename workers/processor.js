@@ -1,6 +1,7 @@
 import { Worker } from 'bullmq';
 import { getRedis } from '../src/lib/redis.js';
-import { prisma } from '../src/lib/prisma.js';
+import { connectDb } from '../src/lib/db.js';
+import { User, Job, Application, PendingQuestion } from '../src/models/index.js';
 import { scrapeJobs } from '../src/services/scraperService.js';
 import { ResumeService } from '../src/services/resumeService.js';
 import { AIProviderFactory } from '../src/services/aiProviders.js';
@@ -21,6 +22,12 @@ if (!redis) {
 
 const resumeService = new ResumeService();
 
+function fmtUser(u) {
+  const o = typeof u.toObject === 'function' ? u.toObject() : { ...u };
+  o.id = String(o._id);
+  return o;
+}
+
 async function runApply({ user, job, ai, credentials, mode }) {
   const tailored = await resumeService.generateTailoredResume(user.profile, job.description, ai, { format: 'ats' });
   const pdf = await resumeTextToPdf({ name: user.profile?.name || user.name || 'Resume', resumeText: tailored.resume });
@@ -37,16 +44,14 @@ async function runApply({ user, job, ai, credentials, mode }) {
 
 async function saveApplication({ userId, jobId, tailored, outcome }) {
   const status = outcome.success ? 'applied' : (outcome.needsReview ? 'needs_review' : (outcome.skipped ? 'skipped' : 'failed'));
-  return prisma.application.create({
-    data: {
-      userId, jobId,
-      status,
-      resumeUsed: tailored.resume.slice(0, 15000),
-      response: outcome.response || {},
-      answersUsed: outcome.answersUsed || null,
-      error: outcome.error || null,
-      appliedAt: outcome.success ? new Date() : null
-    }
+  return Application.create({
+    userId, jobId,
+    status,
+    resumeUsed: tailored.resume.slice(0, 15000),
+    response: outcome.response || {},
+    answersUsed: outcome.answersUsed || null,
+    error: outcome.error || null,
+    appliedAt: outcome.success ? new Date() : null
   });
 }
 
@@ -57,8 +62,8 @@ async function handleNeedsReview({ user, job, app, outcome }) {
   if (!items.length) return;
   const created = await createPendingQuestions({
     userId: user.id,
-    jobId: job.id,
-    applicationId: app.id,
+    jobId: job.id || job._id,
+    applicationId: app._id,
     source: job.source,
     unanswered: items
   }).catch(() => []);
@@ -71,39 +76,43 @@ async function handleNeedsReview({ user, job, app, outcome }) {
 }
 
 new Worker('hakein-jobs', async (job) => {
+  await connectDb();
+
   if (job.name === 'retry-apply') {
     const { applicationId, provider = 'gemini', apiKey } = job.data;
-    const app = await prisma.application.findUnique({ where: { id: applicationId }, include: { job: true } });
+    const app = await Application.findById(applicationId).populate('job').lean();
     if (!app) throw new Error('Application not found');
-    const user = await prisma.user.findUnique({ where: { id: app.userId } });
-    if (!user) throw new Error('User not found');
+    const userDoc = await User.findById(app.userId).lean();
+    if (!userDoc) throw new Error('User not found');
+    const user = fmtUser(userDoc);
     const key = apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
     if (!key) throw new Error('No AI apiKey');
     const ai = AIProviderFactory.create(provider, key);
     const prefs = user.preferences || {};
     const credentials = { linkedin: resolveCredentials(user, 'linkedin'), naukri: resolveCredentials(user, 'naukri') };
-    const { tailored, outcome } = await runApply({ user, job: app.job, ai, credentials, mode: prefs.autoAnswerMode || 'assisted' });
+    const { tailored, outcome } = await runApply({
+      user, job: { ...app.job, id: String(app.job._id) }, ai, credentials, mode: prefs.autoAnswerMode || 'full-auto'
+    });
     const status = outcome.success ? 'applied' : (outcome.needsReview ? 'needs_review' : (outcome.skipped ? 'skipped' : 'failed'));
-    await prisma.application.update({
-      where: { id: app.id },
-      data: {
+    await Application.findByIdAndUpdate(app._id, {
+      $set: {
         status,
         resumeUsed: tailored.resume.slice(0, 15000),
         response: outcome.response || {},
         answersUsed: outcome.answersUsed || null,
         error: outcome.error || null,
-        appliedAt: outcome.success ? new Date() : null,
-        retryCount: { increment: 1 }
-      }
+        appliedAt: outcome.success ? new Date() : null
+      },
+      $inc: { retryCount: 1 }
     });
     if (outcome.needsReview) {
-      await handleNeedsReview({ user, job: app.job, app, outcome });
+      await handleNeedsReview({ user, job: { ...app.job, id: String(app.job._id) }, app, outcome });
     } else {
       // Resolved — close any still-pending inbox items for this application
-      await prisma.pendingQuestion.updateMany({
-        where: { applicationId: app.id, status: 'pending' },
-        data: { status: 'expired' }
-      }).catch(() => {});
+      await PendingQuestion.updateMany(
+        { applicationId: app._id, status: 'pending' },
+        { $set: { status: 'expired' } }
+      ).catch(() => {});
     }
     return { status, error: outcome.error || null };
   }
@@ -111,8 +120,9 @@ new Worker('hakein-jobs', async (job) => {
   if (job.name !== 'auto-apply') return;
   const { userId, provider = 'gemini', apiKey, maxApplies = 5, dryRun = true } = job.data;
 
-  const user = await prisma.user.findUnique({ where: { id: userId } });
-  if (!user) throw new Error('User not found');
+  const userDoc = await User.findById(userId).lean();
+  if (!userDoc) throw new Error('User not found');
+  const user = fmtUser(userDoc);
 
   // 1. Scrape last-24h jobs and store (LinkedIn + Naukri)
   const prefs = user.preferences || {};
@@ -124,9 +134,9 @@ new Worker('hakein-jobs', async (job) => {
   });
 
   // 2. Skip already-applied
-  const applied = await prisma.application.findMany({ where: { userId }, select: { jobId: true } });
-  const appliedSet = new Set(applied.map((a) => a.jobId));
-  const fresh = jobs.filter((j) => !appliedSet.has(j.id)).slice(0, maxApplies);
+  const applied = await Application.find({ userId: user._id }).select('jobId').lean();
+  const appliedSet = new Set(applied.map((a) => String(a.jobId)));
+  const fresh = jobs.filter((j) => !appliedSet.has(String(j.id || j._id))).slice(0, maxApplies);
 
   const results = [];
   const key = apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
@@ -146,10 +156,13 @@ new Worker('hakein-jobs', async (job) => {
       const tailored = await resumeService.generateTailoredResume(user.profile, j.description, ai, { format: 'ats' });
 
       if (dryRun) {
-        const app = await prisma.application.create({
-          data: { userId, jobId: j.id, status: 'pending', resumeUsed: tailored.resume.slice(0, 15000), response: { dryRun: true, atsScore: tailored.atsScore } }
+        const app = await Application.create({
+          userId: user._id, jobId: j.id || j._id,
+          status: 'pending',
+          resumeUsed: tailored.resume.slice(0, 15000),
+          response: { dryRun: true, atsScore: tailored.atsScore }
         });
-        results.push({ jobId: j.id, title: j.title, source: j.source, dryRun: true, applicationId: app.id, atsScore: tailored.atsScore });
+        results.push({ jobId: j.id, title: j.title, source: j.source, dryRun: true, applicationId: String(app._id), atsScore: tailored.atsScore });
         continue;
       }
 
@@ -162,13 +175,13 @@ new Worker('hakein-jobs', async (job) => {
         resumeText: tailored.resume,
         user: { ...user, preferences: { ...(user.preferences || {}), autoAnswerMode: mode } },
         credentials,
-        answerCtx: { userId, user, job: j, resumeText: tailored.resume, aiProvider: ai, mode }
+        answerCtx: { userId: user.id, user, job: j, resumeText: tailored.resume, aiProvider: ai, mode }
       });
-      const app = await saveApplication({ userId, jobId: j.id, tailored, outcome });
+      const app = await saveApplication({ userId: user._id, jobId: j.id || j._id, tailored, outcome });
       if (outcome.needsReview) {
         await handleNeedsReview({ user, job: j, app, outcome });
       }
-      results.push({ jobId: j.id, title: j.title, source: j.source, applied: outcome.success, status: app.status, applicationId: app.id, error: outcome.error, answersUsed: outcome.answersUsed });
+      results.push({ jobId: j.id, title: j.title, source: j.source, applied: outcome.success, status: app.status, applicationId: String(app._id), error: outcome.error, answersUsed: outcome.answersUsed });
     } catch (e) {
       results.push({ jobId: j.id, title: j.title, source: j.source, applied: false, error: e.message?.slice(0, 300) });
     }

@@ -1,16 +1,17 @@
 import { Router } from 'express';
 import Joi from 'joi';
-import { prisma } from '../lib/prisma.js';
+import { connectDb, dbReady } from '../lib/db.js';
+import { User, Job, Application } from '../models/index.js';
 import { scrapeJobs } from '../services/scraperService.js';
 
 export const jobsRoutes = Router();
 
-function dbReady(res) {
-  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('<username>')) {
-    res.status(503).json({ error: 'DATABASE_URL (Mongo Atlas) not configured. Set it in .env' });
-    return false;
-  }
-  return true;
+function fmt(doc) {
+  if (!doc) return doc;
+  const o = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc };
+  o.id = String(o._id);
+  if (o.jobId) o.jobId = String(o.jobId);
+  return o;
 }
 
 // Trigger a scrape for a user (last 24h, easy-apply filter)
@@ -27,10 +28,11 @@ jobsRoutes.post('/scrape', async (req, res, next) => {
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
 
-    const user = await prisma.user.findUnique({ where: { id: value.userId } });
+    await connectDb();
+    const user = await User.findById(value.userId).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
 
-    const result = await scrapeJobs(user, {
+    const result = await scrapeJobs({ ...user, id: String(user._id) }, {
       sources: value.sources,
       hoursBack: value.hoursBack,
       maxJobs: value.maxJobs,
@@ -47,13 +49,13 @@ jobsRoutes.get('/', async (req, res, next) => {
     const { source, limit = '20', q } = req.query;
     const where = {};
     if (source) where.source = source;
-    if (q) where.title = { contains: q, mode: 'insensitive' };
-    const jobs = await prisma.job.findMany({
-      where,
-      orderBy: { postedAt: 'desc' },
-      take: Math.min(parseInt(limit, 10) || 20, 100)
-    });
-    res.json({ count: jobs.length, jobs });
+    if (q) where.title = { $regex: q, $options: 'i' };
+    await connectDb();
+    const jobs = await Job.find(where)
+      .sort({ postedAt: -1 })
+      .limit(Math.min(parseInt(limit, 10) || 20, 100))
+      .lean();
+    res.json({ count: jobs.length, jobs: jobs.map(fmt) });
   } catch (e) { next(e); }
 });
 
@@ -61,19 +63,17 @@ jobsRoutes.get('/', async (req, res, next) => {
 jobsRoutes.get('/matches/:userId', async (req, res, next) => {
   try {
     if (!dbReady(res)) return;
-    const user = await prisma.user.findUnique({ where: { id: req.params.userId } });
+    await connectDb();
+    const user = await User.findById(req.params.userId).lean();
     if (!user) return res.status(404).json({ error: 'User not found' });
-    const applied = await prisma.application.findMany({
-      where: { userId: user.id },
-      select: { jobId: true }
-    });
-    const appliedIds = new Set(applied.map((a) => a.jobId));
+    const applied = await Application.find({ userId: user._id }).select('jobId').lean();
+    const appliedIds = new Set(applied.map((a) => String(a.jobId)));
     const cutoff = new Date(Date.now() - 24 * 60 * 60 * 1000);
-    const jobs = await prisma.job.findMany({
-      where: { postedAt: { gte: cutoff } },
-      orderBy: { postedAt: 'desc' },
-      take: 50
-    });
-    res.json({ count: jobs.filter((j) => !appliedIds.has(j.id)).length, jobs: jobs.filter((j) => !appliedIds.has(j.id)) });
+    const jobs = await Job.find({ postedAt: { $gte: cutoff } })
+      .sort({ postedAt: -1 })
+      .limit(50)
+      .lean();
+    const fresh = jobs.filter((j) => !appliedIds.has(String(j._id)));
+    res.json({ count: fresh.length, jobs: fresh.map(fmt) });
   } catch (e) { next(e); }
 });

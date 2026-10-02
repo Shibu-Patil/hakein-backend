@@ -1,6 +1,22 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { prisma } from '../lib/prisma.js';
+import { connectDb } from '../lib/db.js';
+import { Job, ScrapingLog } from '../models/index.js';
+
+async function dbOk() {
+  try {
+    await connectDb();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function fmtJob(doc) {
+  const o = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc };
+  o.id = String(o._id);
+  return o;
+}
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36';
 
@@ -130,7 +146,9 @@ export async function scrapeJobs(user, { sources = ['linkedin', 'naukri'], hours
     } catch (e) {
       logs.push({ source: src, error: e.message });
       try {
-        await prisma.scrapingLog.create({ data: { source: src, status: 'failed', jobsFound: 0, jobsNew: 0, error: e.message.slice(0, 500), duration: Date.now() - started } });
+        if (await dbOk()) {
+          await ScrapingLog.create({ source: src, status: 'failed', jobsFound: 0, jobsNew: 0, error: e.message.slice(0, 500), duration: Date.now() - started });
+        }
       } catch { /* db may be down */ }
     }
   }
@@ -139,30 +157,34 @@ export async function scrapeJobs(user, { sources = ['linkedin', 'naukri'], hours
 
   let inserted = 0;
   const jobsToReturn = [];
+  const canDb = await dbOk();
   for (const j of all.slice(0, maxJobs)) {
     try {
-      const rec = await prisma.job.upsert({
-        where: { source_externalId: { source: j.source, externalId: String(j.externalId).slice(0, 200) } },
-        update: {},
-        create: {
-          source: j.source,
-          externalId: String(j.externalId).slice(0, 200),
-          title: j.title.slice(0, 300),
-          company: j.company.slice(0, 200),
-          location: j.location.slice(0, 200),
-          url: j.url.slice(0, 1000),
-          description: j.description.slice(0, 15000),
-          postedAt: j.postedAt,
-          rawData: j.rawData || {}
-        }
-      });
+      if (!canDb) break;
+      const rec = await Job.findOneAndUpdate(
+        { source: j.source, externalId: String(j.externalId).slice(0, 200) },
+        {
+          $setOnInsert: {
+            source: j.source,
+            externalId: String(j.externalId).slice(0, 200),
+            title: j.title.slice(0, 300),
+            company: j.company.slice(0, 200),
+            location: j.location.slice(0, 200),
+            url: j.url.slice(0, 1000),
+            description: j.description.slice(0, 15000),
+            postedAt: j.postedAt,
+            rawData: j.rawData || {}
+          }
+        },
+        { upsert: true, new: true }
+      );
       inserted++;
-      jobsToReturn.push(rec);
+      jobsToReturn.push(fmtJob(rec));
     } catch { /* duplicate */ }
   }
   try {
     for (const l of logs) {
-      if (!l.error) await prisma.scrapingLog.create({ data: { source: l.source, status: 'success', jobsFound: l.found, jobsNew: inserted, duration: Date.now() - started } });
+      if (!l.error) await ScrapingLog.create({ source: l.source, status: 'success', jobsFound: l.found, jobsNew: inserted, duration: Date.now() - started });
     }
   } catch { /* ignore */ }
   return { inserted, logs, jobs: jobsToReturn };

@@ -1,17 +1,20 @@
 import { Router } from 'express';
 import Joi from 'joi';
-import { prisma } from '../lib/prisma.js';
+import { connectDb, dbReady } from '../lib/db.js';
+import { Application } from '../models/index.js';
 import { getRedis } from '../lib/redis.js';
 import { Queue } from 'bullmq';
 
 export const applicationsRoutes = Router();
 
-function dbReady(res) {
-  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('<username>')) {
-    res.status(503).json({ error: 'DATABASE_URL (Mongo Atlas) not configured. Set it in .env' });
-    return false;
-  }
-  return true;
+function fmt(doc) {
+  if (!doc) return doc;
+  const o = typeof doc.toObject === 'function' ? doc.toObject() : { ...doc };
+  o.id = String(o._id);
+  if (o.jobId) o.jobId = String(o.jobId);
+  if (o.userId) o.userId = String(o.userId);
+  if (o.job && o.job._id) o.job.id = String(o.job._id);
+  return o;
 }
 
 // Enqueue auto-apply run for a user (worker processes scrape + tailor + apply)
@@ -43,12 +46,12 @@ applicationsRoutes.post('/auto-apply', async (req, res, next) => {
 applicationsRoutes.get('/user/:userId', async (req, res, next) => {
   try {
     if (!dbReady(res)) return;
-    const apps = await prisma.application.findMany({
-      where: { userId: req.params.userId },
-      include: { job: true },
-      orderBy: { createdAt: 'desc' },
-      take: 100
-    });
-    res.json({ count: apps.length, applications: apps });
+    await connectDb();
+    const apps = await Application.find({ userId: req.params.userId })
+      .populate('job')
+      .sort({ createdAt: -1 })
+      .limit(100)
+      .lean();
+    res.json({ count: apps.length, applications: apps.map(fmt) });
   } catch (e) { next(e); }
 });

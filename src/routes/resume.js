@@ -10,8 +10,8 @@ const resumeService = new ResumeService();
 const jobExtractor = new JobExtractorService();
 
 const generateSchema = Joi.object({
-  provider: Joi.string().valid('gemini', 'openai', 'anthropic').required(),
-  apiKey: Joi.string().required(),
+  provider: Joi.string().valid('gemini', 'openai', 'anthropic').default('gemini'),
+  apiKey: Joi.string().optional(),
   userProfile: Joi.object({
     name: Joi.string().required(),
     email: Joi.string().email().required(),
@@ -77,7 +77,10 @@ resumeRoutes.post('/generate', async (req, res, next) => {
       return res.status(400).json({ error: error.details[0].message });
     }
 
-    const { provider, apiKey, userProfile, jobInput, options } = value;
+    const { provider, jobInput, options } = value;
+    const apiKey = value.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(400).json({ error: 'No API key. Pass apiKey or set GEMINI_API_KEY on the server.' });
+    const { userProfile } = value;
 
     let jobDescription;
     if (jobInput.type === 'url') {
@@ -111,9 +114,11 @@ resumeRoutes.post('/analyze-ats', async (req, res, next) => {
       return res.status(400).json({ error: error.details[0].message });
     }
 
+    const key = req.body.apiKey || process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+    if (!key) return res.status(400).json({ error: 'No API key. Pass apiKey or set GEMINI_API_KEY on the server.' });
     const aiProvider = AIProviderFactory.create(
       req.body.provider || 'gemini',
-      req.body.apiKey
+      key
     );
     const analysis = await resumeService.analyzeATS(value.resume, value.jobDescription, aiProvider);
     res.json(analysis);

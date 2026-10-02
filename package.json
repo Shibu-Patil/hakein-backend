@@ -11,10 +11,6 @@
     "scheduler": "node workers/scheduler.js",
     "scraper:linkedin": "node scrapers/linkedin.js",
     "scraper:naukri": "node scrapers/naukri.js",
-    "db:generate": "prisma generate",
-    "db:push": "prisma db push",
-    "db:migrate": "prisma migrate dev",
-    "db:studio": "prisma studio",
     "db:seed": "node scripts/seedQa.js",
     "test": "node --test tests/qa.test.js tests/autoApply.test.js"
   },
@@ -30,7 +26,6 @@
   "license": "ISC",
   "dependencies": {
     "@google/generative-ai": "^0.15.0",
-    "@prisma/client": "^5.22.0",
     "axios": "^1.7.2",
     "bullmq": "^5.81.5",
     "cheerio": "^1.0.0-rc.12",
@@ -42,14 +37,12 @@
     "helmet": "^7.1.0",
     "ioredis": "^5.11.1",
     "joi": "^17.13.3",
+    "mongoose": "^8.24.4",
     "node-cron": "^3.0.3",
     "nodemailer": "^6.10.1",
     "pdf-parse": "^1.1.1",
     "pdfkit": "^0.15.2",
     "playwright": "^1.63.0",
     "uuid": "^10.0.0"
-  },
-  "devDependencies": {
-    "prisma": "^5.22.0"
   }
 }

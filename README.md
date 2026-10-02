@@ -27,9 +27,7 @@ Scheduler (every 2h) → Scrape last-24h jobs → Tailor resume per JD (ATS)
 npm install
 npx playwright install chromium   # only needed for live apply / login tests
 cp .env.example .env              # then fill DATABASE_URL + REDIS_URL + keys (below)
-npx prisma generate
-npx prisma db push                # create collections on Atlas
-npm start                         # API on :3000
+npm start                         # API on :3000 (collections are created automatically on first write)
 npm run worker                    # background apply worker (separate terminal)
 npm run scheduler                 # 2-hour watch loop (separate terminal)
 ```
@@ -144,12 +142,12 @@ src/
   services/auth.js         credential resolution (user → env), captcha/2FA/authwall detection
   services/notify.js       free alerts: Gmail SMTP + ntfy.sh push (phone rings with app closed)
   services/pdfGenerator.js ATS-safe single-column PDF (pdfkit)
-  lib/       prisma.js / redis.js / crypto.js
+  lib/       db.js (Mongoose connect) / redis.js / crypto.js
+  models/      Mongoose models: User, Job, Application, ScreeningAnswer, PendingQuestion, ScrapingLog
 workers/
   processor.js             BullMQ `auto-apply` (scrape→tailor→apply→inbox+notify) + `retry-apply`
   scheduler.js             cron every 2h, enqueues live applies for autoApply users (live by default)
   index.js                 worker entry
-prisma/schema.prisma       Mongo models: User, Job, Application, ScreeningAnswer, PendingQuestion, ScrapingLog
 data/screening-qa.json     33 seed questions + qaProfile template
 scripts/seedQa.js          `npm run db:seed -- --email=… [--dry-run]`
 tests/qa.test.js + autoApply.test.js   `npm test` (no DB/browser needed; live-login test is gated)
