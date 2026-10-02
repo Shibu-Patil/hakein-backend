@@ -136,7 +136,7 @@ new Worker('hakein-jobs', async (job) => {
     linkedin: resolveCredentials(user, 'linkedin'),
     naukri: resolveCredentials(user, 'naukri')
   };
-  const mode = prefs.autoAnswerMode || 'assisted';
+  const mode = prefs.autoAnswerMode || 'full-auto';
 
   const ai = AIProviderFactory.create(provider, key);
 

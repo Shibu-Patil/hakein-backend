@@ -140,8 +140,9 @@ export function closestOptionFallback(answer, options = []) {
 
 // Main entry: stored answer -> qaProfile -> LLM. Saves learned answers.
 // mode: 'assisted' (default, safe) or 'full-auto' (best-effort everything).
-export async function answerQuestion({ userId, user, question, fieldType = 'text', options = [], job, resumeText, aiProvider, mode = 'assisted' }) {
-  const fullAuto = mode === 'full-auto' || user?.preferences?.autoAnswerMode === 'full-auto';
+export async function answerQuestion({ userId, user, question, fieldType = 'text', options = [], job, resumeText, aiProvider, mode }) {
+  const pref = mode || user?.preferences?.autoAnswerMode;
+  const fullAuto = pref ? pref === 'full-auto' : true;
   const norm = normalizeQuestion(question);
   if (!norm) return { answer: null, source: 'none', error: 'empty question' };
 

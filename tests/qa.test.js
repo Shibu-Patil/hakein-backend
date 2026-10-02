@@ -115,7 +115,22 @@ describe('qa - answerQuestion priority (no DB)', () => {
     assert.equal(r.answer, '5');
     assert.equal(r.source, 'llm');
   });
-  it('refuses sensitive questions without stored answer', async () => {
+  it('refuses sensitive questions without stored answer (explicit assisted mode)', async () => {
+    const r = await answerQuestion({
+      userId: null,
+      user: { qaProfile: {}, profile: {}, preferences: { autoAnswerMode: 'assisted' } },
+      question: 'Do you have a disability?',
+      fieldType: 'radio',
+      options: ['Yes', 'No'],
+      job: '',
+      resumeText: '',
+      mode: 'assisted',
+      aiProvider: fakeAI('{"answer":"No","confidence":"high"}')
+    });
+    assert.equal(r.answer, null);
+    assert.equal(r.error, 'sensitive-no-stored-answer');
+  });
+  it('defaults to full-auto when no mode is set', async () => {
     const r = await answerQuestion({
       userId: null,
       user: { qaProfile: {}, profile: {} },
@@ -126,8 +141,7 @@ describe('qa - answerQuestion priority (no DB)', () => {
       resumeText: '',
       aiProvider: fakeAI('{"answer":"No","confidence":"high"}')
     });
-    assert.equal(r.answer, null);
-    assert.equal(r.error, 'sensitive-no-stored-answer');
+    assert.equal(r.answer, 'No');
   });
 });
 

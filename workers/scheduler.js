@@ -27,7 +27,9 @@ async function tick() {
         userId: u.id,
         provider: 'gemini',
         maxApplies: 5,
-        dryRun: process.env.AUTO_APPLY_LIVE === 'true' ? false : true
+        // Live by default: once the user gives credentials, we apply all day without interruption.
+        // Set AUTO_APPLY_LIVE=false to go back to dry-run.
+        dryRun: process.env.AUTO_APPLY_LIVE === 'false'
       });
     }
     await queue.close();
@@ -38,5 +40,5 @@ async function tick() {
 }
 
 cron.schedule(EVERY, tick);
-console.log(`[scheduler] running with cron "${EVERY}". Set AUTO_APPLY_LIVE=true to actually apply (default dry-run).`);
+console.log(`[scheduler] running with cron "${EVERY}". Live apply by default; set AUTO_APPLY_LIVE=false for dry-run.`);
 tick();
