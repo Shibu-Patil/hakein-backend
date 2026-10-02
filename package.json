@@ -1,29 +1,53 @@
 {
   "name": "hakein-backend",
   "version": "1.0.0",
-  "description": "AI-powered resume builder with ATS optimization",
+  "description": "AI-powered resume builder with ATS optimization and job automation",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
     "dev": "node --watch src/index.js",
+    "worker": "node workers/index.js",
+    "scheduler": "node workers/scheduler.js",
+    "scraper:linkedin": "node scrapers/linkedin.js",
+    "scraper:naukri": "node scrapers/naukri.js",
+    "db:generate": "prisma generate",
+    "db:push": "prisma db push",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
-  "keywords": ["resume", "ai", "ats", "gemini", "job-matching"],
+  "keywords": [
+    "resume",
+    "ai",
+    "ats",
+    "gemini",
+    "job-matching",
+    "automation"
+  ],
   "author": "",
   "license": "ISC",
   "dependencies": {
     "@google/generative-ai": "^0.15.0",
+    "@prisma/client": "^5.22.0",
     "axios": "^1.7.2",
+    "bullmq": "^5.81.5",
     "cheerio": "^1.0.0-rc.12",
     "cors": "^2.8.5",
+    "crypto-js": "^4.2.0",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-rate-limit": "^7.4.0",
     "helmet": "^7.1.0",
+    "ioredis": "^5.11.1",
     "joi": "^17.13.3",
+    "node-cron": "^3.0.3",
     "pdf-parse": "^1.1.1",
+    "pdfkit": "^0.15.2",
+    "playwright": "^1.63.0",
     "uuid": "^10.0.0"
   },
-  "devDependencies": {}
+  "devDependencies": {
+    "prisma": "^5.22.0"
+  }
 }

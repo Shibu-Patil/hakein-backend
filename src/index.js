@@ -5,6 +5,9 @@ import rateLimit from 'express-rate-limit';
 import dotenv from 'dotenv';
 import { resumeRoutes } from './routes/resume.js';
 import { healthRoutes } from './routes/health.js';
+import { usersRoutes } from './routes/users.js';
+import { jobsRoutes } from './routes/jobs.js';
+import { applicationsRoutes } from './routes/applications.js';
 
 dotenv.config();
 
@@ -13,7 +16,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(helmet());
 app.use(cors({
-  origin: process.env.FRONTEND_URL || 'http://localhost:5173',
+  origin: process.env.FRONTEND_URL?.split(',') || ['http://localhost:5173'],
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
@@ -28,14 +31,47 @@ app.use('/api/', limiter);
 
 app.use('/api/health', healthRoutes);
 app.use('/api/resume', resumeRoutes);
+app.use('/api/users', usersRoutes);
+app.use('/api/jobs', jobsRoutes);
+app.use('/api/applications', applicationsRoutes);
 
+app.get('/', (req, res) => {
+  res.json({
+    name: 'hakein-backend',
+    version: '1.0.0',
+    endpoints: [
+      'GET /api/health',
+      'POST /api/resume/generate',
+      'POST /api/resume/extract-jd',
+      'POST /api/resume/analyze-ats',
+      'POST /api/users',
+      'GET /api/users/:id',
+      'PATCH /api/users/:id/preferences',
+      'POST /api/jobs/scrape',
+      'GET /api/jobs',
+      'GET /api/jobs/matches/:userId',
+      'POST /api/applications/auto-apply',
+      'GET /api/applications/user/:userId'
+    ],
+    notes: 'Automation runs server-side. iOS/Windows clients use this HTTP API. Set DATABASE_URL (Mongo Atlas) + REDIS_URL to enable DB/queue.'
+  });
+});
+
+// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ error: 'Internal server error' });
+  const status = err.status || 500;
+  res.status(status).json({ error: err.message || 'Internal server error' });
 });
 
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
+  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('<username>')) {
+    console.warn('[warn] DATABASE_URL not set - /users /jobs /applications will return 503 until Mongo Atlas URL is set');
+  }
+  if (!process.env.REDIS_URL) {
+    console.warn('[warn] REDIS_URL not set - queue/worker disabled, resume API still works');
+  }
 });
 
 export default app;
