@@ -237,3 +237,19 @@ describe('agent.yaml - config', () => {
     assert.equal(o.model, 'x/y');
   });
 });
+
+describe('tokens + model errors', () => {
+  it('sums per-step usage', async () => {
+    const { sumUsage } = await import('../src/services/resumeService.js');
+    const t = sumUsage([{ input: 100, output: 50, total: 150 }, { input: 200, output: 0, total: 200 }]);
+    assert.deepEqual(t, { input: 300, output: 50, total: 350 });
+  });
+  it('explains overloaded/unknown models with agent.yaml hint', async () => {
+    const { friendlyModelError } = await import('../src/services/aiProviders.js');
+    const e503 = friendlyModelError(new Error('[503 Service Unavailable] high demand'), 'gemini-3.6-flash');
+    assert.equal(e503.status, 502);
+    assert.ok(/agent\.yaml/.test(e503.message));
+    const e404 = friendlyModelError(new Error('model not found'), 'bad-model');
+    assert.equal(e404.status, 502);
+  });
+});

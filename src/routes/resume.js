@@ -235,7 +235,10 @@ resumeRoutes.post('/tailor-file', publicLimiter, upload.single('resume'), async 
       'Content-Type': 'application/pdf',
       'Content-Disposition': 'attachment; filename="tailored-resume.pdf"',
       'X-ATS-Score': String(result.atsScore?.score ?? ''),
-      'Access-Control-Expose-Headers': 'X-ATS-Score'
+      'X-Tokens-In': String(result.usage?.total?.input ?? ''),
+      'X-Tokens-Out': String(result.usage?.total?.output ?? ''),
+      'X-Tokens-Total': String(result.usage?.total?.total ?? ''),
+      'Access-Control-Expose-Headers': 'X-ATS-Score, X-Tokens-In, X-Tokens-Out, X-Tokens-Total'
     });
     res.send(pdf);
   } catch (err) {

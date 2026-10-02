@@ -1,11 +1,33 @@
 import { v4 as uuidv4 } from 'uuid';
 
+// Pure: sum per-step usage into totals.
+export function sumUsage(steps = []) {
+  const total = { input: 0, output: 0, total: 0 };
+  for (const s of steps) {
+    total.input += s.input || 0;
+    total.output += s.output || 0;
+    total.total += s.total || 0;
+  }
+  return total;
+}
+
 export class ResumeService {
+  // Wrap one model call and record its token usage under `step`.
+  async callWithUsage(aiProvider, step, bucket, fn) {
+    const text = await fn();
+    const u = aiProvider.lastUsage;
+    bucket.push({ step, model: aiProvider.model, ...(u || { input: 0, output: 0, total: 0, estimated: true }) });
+    return text;
+  }
   // Public flow: raw resume text -> structured profile -> normal tailored pipeline.
   // No login, no saved profile needed.
   async tailorFromResumeText(resumeText, jobDescription, aiProvider, options = {}) {
-    const userProfile = await this.parseResumeText(resumeText, aiProvider);
-    return this.generateTailoredResume(userProfile, jobDescription, aiProvider, options);
+    const preSteps = [];
+    const userProfile = await this.callWithUsage(aiProvider, 'parse-resume', preSteps, () => this.parseResumeText(resumeText, aiProvider));
+    const result = await this.generateTailoredResume(userProfile, jobDescription, aiProvider, options);
+    const steps = [...preSteps, ...result.usage.steps];
+    result.usage = { steps, total: sumUsage(steps) };
+    return result;
   }
 
   async parseResumeText(resumeText, aiProvider) {
@@ -21,25 +43,30 @@ Return ONLY JSON:
   }
 
   async generateTailoredResume(userProfile, jobDescription, aiProvider, options = {}) {
-    const analysis = await this.analyzeJobDescription(jobDescription, aiProvider);
-    const tailoredContent = await this.generateTailoredContent(
+    const usage = [];
+    const call = (step, fn) => this.callWithUsage(aiProvider, step, usage, fn);
+    const analysis = await call('analyze-jd', () => this.analyzeJobDescription(jobDescription, aiProvider));
+    const tailoredContent = await call('tailor', () => this.generateTailoredContent(
       userProfile,
       jobDescription,
       analysis,
       aiProvider,
       options
-    );
-    const atsOptimized = await this.optimizeForATS(tailoredContent, jobDescription, aiProvider);
+    ));
+    const atsOptimized = await call('ats-optimize', () => this.optimizeForATS(tailoredContent, jobDescription, aiProvider));
     const formatted = this.formatResume(atsOptimized, userProfile, options.format || 'ats');
+    const atsScore = await call('ats-score', () => this.calculateATSScore(formatted, jobDescription, aiProvider));
 
     return {
       id: uuidv4(),
       resume: formatted,
-      analysis: analysis,
-      atsScore: await this.calculateATSScore(formatted, jobDescription, aiProvider),
+      analysis,
+      atsScore,
+      usage: { steps: usage, total: sumUsage(usage) },
       metadata: {
         generatedAt: new Date().toISOString(),
         provider: aiProvider.constructor.name,
+        model: aiProvider.model,
         jobDescriptionLength: jobDescription.length,
         targetRole: options.targetRole
       }

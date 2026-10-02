@@ -21,6 +21,7 @@ class BaseProvider {
   constructor(apiKey, model) {
     this.apiKey = apiKey;
     this.model = model;
+    this.lastUsage = null; // { input, output, total } of the most recent call
   }
   async generate(prompt) {
     throw new Error('Not implemented');
@@ -35,28 +36,44 @@ class GeminiProvider extends BaseProvider {
   }
 
   async generate(prompt) {
-    const result = await this.generativeModel.generateContent(prompt);
+    let result;
+    try {
+      result = await this.generativeModel.generateContent(prompt);
+    } catch (e) {
+      throw friendlyModelError(e, this.model);
+    }
+    const um = result.response?.usageMetadata;
+    this.lastUsage = um
+      ? { input: um.promptTokenCount || 0, output: um.candidatesTokenCount || 0, total: um.totalTokenCount || 0 }
+      : null;
     return result.response.text();
   }
 }
 
 class OpenAIProvider extends BaseProvider {
   async generate(prompt) {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${this.apiKey}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 4000
-      })
-    });
+    let response;
+    try {
+      response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${this.apiKey}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          model: this.model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.3,
+          max_tokens: 4000
+        })
+      });
+    } catch (e) {
+      throw friendlyModelError(e, this.model);
+    }
     const data = await response.json();
-    if (!data.choices?.[0]) throw new Error(`OpenAI error: ${JSON.stringify(data).slice(0, 300)}`);
+    if (!data.choices?.[0]) throw friendlyModelError(new Error(`OpenAI error: ${JSON.stringify(data).slice(0, 300)}`), this.model);
+    const u = data.usage;
+    this.lastUsage = u ? { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, total: u.total_tokens || 0 } : null;
     return data.choices[0].message.content;
   }
 }
@@ -77,7 +94,9 @@ class AnthropicProvider extends BaseProvider {
       })
     });
     const data = await response.json();
-    if (!data.content?.[0]) throw new Error(`Anthropic error: ${JSON.stringify(data).slice(0, 300)}`);
+    if (!data.content?.[0]) throw friendlyModelError(new Error(`Anthropic error: ${JSON.stringify(data).slice(0, 300)}`), this.model);
+    const u = data.usage;
+    this.lastUsage = u ? { input: u.input_tokens || 0, output: u.output_tokens || 0, total: (u.input_tokens || 0) + (u.output_tokens || 0) } : null;
     return data.content[0].text;
   }
 }
@@ -100,7 +119,35 @@ class OpenRouterProvider extends BaseProvider {
       })
     });
     const data = await response.json();
-    if (!data.choices?.[0]) throw new Error(`OpenRouter error: ${JSON.stringify(data).slice(0, 300)}`);
+    if (!data.choices?.[0]) throw friendlyModelError(new Error(`OpenRouter error: ${JSON.stringify(data).slice(0, 300)}`), this.model);
+    const u = data.usage;
+    this.lastUsage = u ? { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, total: u.total_tokens || 0 } : null;
     return data.choices[0].message.content;
   }
+}
+
+// Turn raw SDK errors (bad model name, overload, bad key) into actionable messages.
+export function friendlyModelError(err, model) {
+  const msg = String(err?.message || err);
+  if (/503|overloaded|high demand|Service Unavailable/i.test(msg)) {
+    const e = new Error(
+      `Model "${model}" is unavailable (overloaded or wrong name). Check the model name in agent.yaml — valid Gemini names look like gemini-2.0-flash, gemini-1.5-pro, gemini-1.5-flash.`
+    );
+    e.status = 502;
+    e.cause = msg.slice(0, 300);
+    return e;
+  }
+  if (/404|not found|does not exist|invalid model/i.test(msg)) {
+    const e = new Error(`Model "${model}" was not found. Fix the model name in agent.yaml.`);
+    e.status = 502;
+    e.cause = msg.slice(0, 300);
+    return e;
+  }
+  if (/401|403|API key|invalid key|unauthenticated/i.test(msg)) {
+    const e = new Error(`API key rejected for model "${model}". Check the key in .env (keys come only from env).`);
+    e.status = 502;
+    e.cause = msg.slice(0, 300);
+    return e;
+  }
+  return err instanceof Error ? err : new Error(msg);
 }
