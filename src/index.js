@@ -64,14 +64,18 @@ app.use((err, req, res, next) => {
   res.status(status).json({ error: err.message || 'Internal server error' });
 });
 
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-  if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('<username>')) {
-    console.warn('[warn] DATABASE_URL not set - /users /jobs /applications will return 503 until Mongo Atlas URL is set');
-  }
-  if (!process.env.REDIS_URL) {
-    console.warn('[warn] REDIS_URL not set - queue/worker disabled, resume API still works');
-  }
-});
+const isDirectRun = process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop()) && process.argv[1].includes('src/index.js');
+
+if (isDirectRun) {
+  app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+    if (!process.env.DATABASE_URL || process.env.DATABASE_URL.includes('<username>')) {
+      console.warn('[warn] DATABASE_URL not set - /users /jobs /applications will return 503 until Mongo Atlas URL is set');
+    }
+    if (!process.env.REDIS_URL) {
+      console.warn('[warn] REDIS_URL not set - queue/worker disabled, resume API still works');
+    }
+  });
+}
 
 export default app;

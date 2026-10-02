@@ -16,9 +16,11 @@ model User {
   providerId     String?
   profile        Json
   preferences    Json
-  linkedinToken  String?
-  naukriEmail    String?
-  naukriPassword String?
+  linkedinToken    String?
+  linkedinEmail    String?
+  linkedinPassword String?
+  naukriEmail      String?
+  naukriPassword   String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   applications   Application[]
