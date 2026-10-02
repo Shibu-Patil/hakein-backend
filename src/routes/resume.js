@@ -1,9 +1,35 @@
 import { Router } from 'express';
 import Joi from 'joi';
 import rateLimit from 'express-rate-limit';
+import multer from 'multer';
 import { ResumeService } from '../services/resumeService.js';
 import { JobExtractorService } from '../services/jobExtractor.js';
 import { AIProviderFactory } from '../services/aiProviders.js';
+import { resumeTextToPdf } from '../services/pdfGenerator.js';
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_req, file, cb) => {
+    const ok = /pdf|msword|officedocument|plain/i.test(file.mimetype) || /\.(pdf|docx?|txt)$/i.test(file.originalname);
+    cb(ok ? null : new Error('Only PDF, Word (.doc/.docx) or .txt files allowed'), ok);
+  }
+});
+
+async function fileToText(file) {
+  const name = (file.originalname || '').toLowerCase();
+  if (name.endsWith('.pdf') || file.mimetype.includes('pdf')) {
+    const pdfParse = (await import('pdf-parse')).default;
+    const data = await pdfParse(file.buffer);
+    return data.text;
+  }
+  if (name.endsWith('.docx') || name.endsWith('.doc') || /officedocument|msword/i.test(file.mimetype)) {
+    const mammoth = await import('mammoth');
+    const out = await mammoth.extractRawText({ buffer: file.buffer });
+    return out.value;
+  }
+  return file.buffer.toString('utf8');
+}
 
 // Public endpoint burns the server key: 10 tailors/hour per IP.
 const publicLimiter = rateLimit({
@@ -162,6 +188,48 @@ resumeRoutes.post('/tailor-public', publicLimiter, async (req, res, next) => {
     const aiProvider = AIProviderFactory.create(process.env.RESUME_PROVIDER || 'gemini', apiKey);
     const result = await resumeService.tailorFromResumeText(value.resumeText, jobDescription, aiProvider, { format: 'ats' });
     res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+// PUBLIC file version: upload resume (PDF / Word / txt) + JD text or job link -> tailored PDF download.
+// Returns the PDF file directly; ATS score comes back in the X-ATS-Score header.
+resumeRoutes.post('/tailor-file', publicLimiter, upload.single('resume'), async (req, res, next) => {
+  try {
+    if (!req.file) return res.status(400).json({ error: 'Attach your resume as resume file (PDF, Word or txt, max 5MB).' });
+    const jobText = String(req.body.jobText || '').trim();
+    const jobUrl = String(req.body.jobUrl || '').trim();
+    if (!jobText && !jobUrl) {
+      return res.status(400).json({ error: 'Send jobText (JD) or jobUrl (job link) alongside the file.' });
+    }
+
+    const apiKey = process.env.GEMINI_API_KEY || process.env.OPENAI_API_KEY;
+    if (!apiKey) return res.status(503).json({ error: 'Server AI key not configured.' });
+
+    const resumeText = (await fileToText(req.file)).replace(/\s+/g, ' ').trim();
+    if (resumeText.length < 50) {
+      return res.status(400).json({ error: 'Could not read enough text from that file. Try a text-based PDF or DOCX.' });
+    }
+
+    const jobDescription = jobUrl && !jobText
+      ? await jobExtractor.extractFromUrl(jobUrl)
+      : jobText;
+
+    const aiProvider = AIProviderFactory.create(process.env.RESUME_PROVIDER || 'gemini', apiKey);
+    const result = await resumeService.tailorFromResumeText(resumeText, jobDescription, aiProvider, { format: 'ats' });
+    const pdf = await resumeTextToPdf({
+      name: resumeText.split('\n')[0]?.slice(0, 80) || 'Resume',
+      resumeText: result.resume
+    });
+
+    res.set({
+      'Content-Type': 'application/pdf',
+      'Content-Disposition': 'attachment; filename="tailored-resume.pdf"',
+      'X-ATS-Score': String(result.atsScore?.score ?? ''),
+      'Access-Control-Expose-Headers': 'X-ATS-Score'
+    });
+    res.send(pdf);
   } catch (err) {
     next(err);
   }
