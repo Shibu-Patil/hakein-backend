@@ -39,7 +39,13 @@ function withTimeout(promise, ms = 60000) {
   return Promise.race([promise.finally(() => clearTimeout(timer)), timeout]);
 }
 
+function isDailyQuota(err) {
+  const msg = String(err?.message || err);
+  return /PerDayPerProject|per-day|daily.*quota|quota.*day|retry in \d+h/i.test(msg);
+}
+
 function isTransient(err) {
+  if (isDailyQuota(err)) return false; // retrying burns nothing; quota returns in hours
   return /503|overloaded|high demand|Service Unavailable|429|rate limit|timeout|ETIMEDOUT|ECONNRESET|500|fetch failed|network|socket|hang up|EAI_AGAIN|ENOTFOUND/i.test(String(err?.message || err));
 }
 
@@ -155,6 +161,14 @@ class OpenRouterProvider extends BaseProvider {
 // Turn raw SDK errors (bad model name, overload, bad key) into actionable messages.
 export function friendlyModelError(err, model) {
   const msg = String(err?.message || err);
+  if (isDailyQuota({ message: msg })) {
+    const e = new Error(
+      `Daily free quota exhausted for model "${model}" (20/day). Switch agent.yaml to a different model with fresh quota (e.g. gemini-3.5-flash), or wait for reset.`
+    );
+    e.status = 429;
+    e.cause = msg.slice(0, 300);
+    return e;
+  }
   if (/503|overloaded|high demand|Service Unavailable/i.test(msg)) {
     const e = new Error(
       `Model "${model}" stayed overloaded after retries. Wait a minute and try again — spikes are temporary. (Your key and model name are both valid.)`
