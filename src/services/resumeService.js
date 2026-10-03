@@ -119,13 +119,19 @@ INSTRUCTIONS:
 1. Rewrite professional summary to match job requirements exactly
 2. Reorder and rewrite experience bullets to highlight relevant achievements
 3. Quantify achievements with metrics (%, $, time saved, scale)
-4. Include ALL required skills and keywords naturally
+4. Include ALL required skills and keywords naturally — every keyword from JOB ANALYSIS must appear at least once
 5. Match job description language and terminology
 6. Prioritize most relevant experience first
 7. Remove or de-emphasize irrelevant experience
 8. Ensure 100% ATS parseability - standard sections, no tables/graphics
 9. Use action verbs and STAR method (Situation, Task, Action, Result)
 10. Target role: ${options.targetRole || 'Match job title'}
+
+HONESTY RULES (strict, never break):
+- Years of experience may be rounded UP by at most +1 year (3 becomes max 4, 5 becomes max 6). Never more.
+- Never invent employers, degrees, or certifications the profile does not have.
+- Skills MAY be added or expanded to match the JD keywords (e.g. list a tool the candidate can reasonably use).
+- Every keyword must appear at least once, worked naturally into summary, bullets, or skills.
 
 Return JSON with tailored resume sections:
 {
