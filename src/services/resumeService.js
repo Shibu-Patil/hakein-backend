@@ -244,15 +244,23 @@ Return JSON with tailored resume sections:
 
   // --- Honesty enforcement (cannot be bypassed by prompt-ignoring models) ---
 
-  // Real experience span in years from profile dates (MM/YYYY and Mon YYYY supported).
+  // Real experience span in years from profile dates (many formats supported).
   profileYears(profile) {
     const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
     const parse = (s) => {
       const str = String(s || '');
+      if (/present/i.test(str) && !/\d/.test(str)) return new Date();
       let m = str.match(/(\d{1,2})\/(\d{4})/);
       if (m) return new Date(+m[2], +m[1] - 1);
-      m = str.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{4})/i);
-      if (m) return new Date(+m[2], months[m[1].toLowerCase().slice(0, 4)] ?? 0);
+      m = str.match(/(\d{4})-(\d{1,2})/);
+      if (m) return new Date(+m[1], +m[2] - 1);
+      m = str.match(/(\d{1,2})-(\d{4})/);
+      if (m) return new Date(+m[2], +m[1] - 1);
+      m = str.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*[,\s]+(\d{4})/i);
+      if (m) {
+        const key = m[1].toLowerCase().slice(0, 4);
+        return new Date(+m[2], months[key] ?? 0);
+      }
       m = str.match(/\b((19|20)\d{2})\b/);
       if (m) return new Date(+m[1], 0);
       return null;
@@ -290,6 +298,7 @@ Return JSON with tailored resume sections:
     if (real > 0 && claimed > Math.floor(real) + 1) {
       violations.push(`experience inflation: claims ${claimed}y, profile supports max ${Math.floor(real) + 1}y`);
     }
+    const unknownSpan = !(real > 0);
     const known = (userProfile?.experience || []).map((e) => String(e.company || '').toLowerCase().trim()).filter(Boolean);
     const stripDates = (s) => String(s)
       .replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/gi, '')
@@ -309,7 +318,16 @@ Return JSON with tailored resume sections:
         }
       }
     }
-    return { violations: [...new Set(violations)], realYears: Math.floor(real), claimedYears: claimed };
+    return { violations: [...new Set(violations)], realYears: Math.floor(real), claimedYears: claimed, unknownSpan };
+  }
+
+  // Strip model chatter labels some models prepend ("RESUME:", "Here is...").
+  stripLabels(text) {
+    const lines = String(text || '').split('\n');
+    while (lines.length && /^(here is|here's|below is|updated|corrected|fixed|tailored|final)?\s*.*\bresume\b\s*:?\s*(\|.*)?$/i.test(lines[0].trim()) && lines[0].trim().length < 40) {
+      lines.shift();
+    }
+    return lines.join('\n').trim();
   }
 
   async fixHonesty(resumeText, violations, userProfile, aiProvider) {
@@ -328,12 +346,15 @@ ${allowed || '(none listed — keep existing employers as-is and only fix year n
 RULES:
 - Experience claims must not exceed profile truth +1 year. Lower inflated numbers to the allowed max.
 - Any employer block naming a company NOT in the list above must be rewritten to the closest real employer from the list, keeping the JD-relevant wording of the bullets.
+- NEVER change employment dates, company names, or roles except to fix the listed violations.
 - Keep every keyword, skill, and section intact.
+- Output ONLY the resume text. No labels, no preamble like "RESUME:" or "Here is", no commentary.
 Return the FULL corrected resume text, nothing else.
 
 RESUME:
 ${String(resumeText).slice(0, 12000)}`;
-    return aiProvider.generate(prompt);
+    const out = await aiProvider.generate(prompt);
+    return this.stripLabels(out);
   }
 
   async repairKeywords(resumeText, missing, aiProvider) {
@@ -346,8 +367,10 @@ RULES:
 - Weave EACH missing keyword into the resume naturally (summary, an existing bullet, or skills). Skills may be added.
 - Change nothing else. Keep every section, date, and bullet intact.
 - Experience years stay as-is (max +1 rounding already applied).
+- Output ONLY the resume text, no labels or commentary.
 Return the FULL updated resume text, nothing else.`;
-    return aiProvider.generate(prompt);
+    const out = await aiProvider.generate(prompt);
+    return this.stripLabels(out);
   }
 
   async optimizeForATS(content, jobDescription, aiProvider) {

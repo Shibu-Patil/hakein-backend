@@ -310,3 +310,25 @@ describe('honesty - code enforcement', () => {
     assert.equal(r.violations.length, 0);
   });
 });
+
+describe('honesty - labels + date formats', () => {
+  it('strips model preamble labels', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    assert.equal(svc.stripLabels('RESUME:\nSHUBHAM PATIL\ndev').split('\n')[0], 'SHUBHAM PATIL');
+    assert.equal(svc.stripLabels('Here is the corrected resume:\nABC').split('\n')[0], 'ABC');
+    assert.equal(svc.stripLabels('SHUBHAM PATIL\ndev').split('\n')[0], 'SHUBHAM PATIL');
+  });
+  it('parses ISO and dash dates', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    assert.ok(svc.profileYears({ experience: [{ company: 'A', startDate: '2020-06', endDate: '2024-04' }] }) > 3);
+    assert.ok(svc.profileYears({ experience: [{ company: 'A', startDate: 'April 2020', endDate: 'Present' }] }) > 3);
+  });
+  it('flags unknownSpan when dates are unparseable', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    const r = svc.checkHonesty('Dev | X | sometime - later', { experience: [{ company: 'A', startDate: '???', endDate: '' }] });
+    assert.equal(r.unknownSpan, true);
+  });
+});
