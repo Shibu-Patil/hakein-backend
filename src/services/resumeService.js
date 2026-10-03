@@ -118,7 +118,21 @@ Return ONLY JSON:
       atsScore = await call(`ats-score-${round + 1}`, () => this.calculateATSScore(formatted, jobDescription, aiProvider));
     }
 
+    // Honesty gate (code, not prompt — cannot be bypassed): +1yr cap + real employers only.
+    // Runs one LLM fix pass ONLY when the heuristic flags a violation.
+    const honesty = this.checkHonesty(formatted, userProfile);
+    let honestyFixed = false;
+    if (honesty.violations.length) {
+      formatted = await call('honesty-fix', () => this.fixHonesty(formatted, honesty.violations, aiProvider));
+      honestyFixed = true;
+      const recheck = this.checkHonesty(formatted, userProfile);
+      honesty.violations = recheck.violations;
+      honesty.claimedYears = recheck.claimedYears;
+      atsScore = await call('ats-score-final', () => this.calculateATSScore(formatted, jobDescription, aiProvider));
+    }
+
     return {
+      honesty: { fixed: honestyFixed, remaining: honesty.violations, realYears: honesty.realYears },
       id: uuidv4(),
       resume: formatted,
       analysis,
@@ -226,6 +240,80 @@ Return JSON with tailored resume sections:
 
     const response = await aiProvider.generate(prompt);
     return this.parseJSON(response);
+  }
+
+  // --- Honesty enforcement (cannot be bypassed by prompt-ignoring models) ---
+
+  // Real experience span in years from profile dates (MM/YYYY supported).
+  profileYears(profile) {
+    const parse = (s) => {
+      const m = String(s || '').match(/(\d{1,2})\/(\d{4})/);
+      return m ? new Date(+m[2], +m[1] - 1) : null;
+    };
+    let min = null;
+    let max = null;
+    for (const e of profile?.experience || []) {
+      const s = parse(e.startDate);
+      const en = /present/i.test(String(e.endDate || '')) ? new Date() : parse(e.endDate);
+      if (s && (!min || s < min)) min = s;
+      if (en && (!max || en > max)) max = en;
+    }
+    if (!min || !max) return 0;
+    return Math.max(0, (max - min) / (1000 * 60 * 60 * 24 * 365.25));
+  }
+
+  // Largest "X years" claim found in resume text.
+  claimedYears(text) {
+    let best = 0;
+    const re = /(?:over|about|nearly|almost|more than|(\d+)\s*\+)?\s*(\d+)(?:\s*\+)?\s*(?:years?|yrs?)/gi;
+    let m;
+    while ((m = re.exec(String(text || '')))) {
+      const v = Number(m[2]);
+      if (v > best && v <= 60) best = v;
+    }
+    return best;
+  }
+
+  // Pure gate: returns violations[]; empty means clean.
+  checkHonesty(resumeText, userProfile) {
+    const violations = [];
+    const real = this.profileYears(userProfile);
+    const claimed = this.claimedYears(resumeText);
+    if (real > 0 && claimed > Math.floor(real) + 1) {
+      violations.push(`experience inflation: claims ${claimed}y, profile supports max ${Math.floor(real) + 1}y`);
+    }
+    const known = new Set((userProfile?.experience || []).map((e) => String(e.company || '').toLowerCase().trim()).filter(Boolean));
+    const lines = String(resumeText || '').split('\n');
+    for (const line of lines) {
+      // Employer lines look like "Role | Company | dates" or "Role\nCompany | dates"
+      const parts = line.split('|').map((s) => s.trim()).filter(Boolean);
+      if (parts.length >= 2) {
+        for (const part of parts.slice(1)) {
+          const noDates = part.replace(/\d{1,2}\/\d{4}|present|20\d{2}/gi, '').replace(/[-–—]/g, ' ').trim().toLowerCase();
+          if (noDates.length > 3 && ![...known].some((k) => noDates.includes(k) || (k.length > 4 && k.includes(noDates)))) {
+            violations.push(`unknown employer: "${part.trim()}" not in profile`);
+          }
+        }
+      }
+    }
+    return { violations: [...new Set(violations)], realYears: Math.floor(real), claimedYears: claimed };
+  }
+
+  async fixHonesty(resumeText, violations, aiProvider) {
+    const prompt = `Fix ONLY these honesty violations in the resume below. Change nothing else — same sections, bullets, keywords, dates (except corrected ones).
+
+VIOLATIONS:
+${violations.map((v) => `- ${v}`).join('\n')}
+
+RULES:
+- Experience claims must not exceed profile truth +1 year. Lower inflated numbers to the allowed max.
+- Employers not in the candidate's real history must be replaced with the real employers and their real roles.
+- Keep every keyword, skill, and section intact.
+Return the FULL corrected resume text, nothing else.
+
+RESUME:
+${String(resumeText).slice(0, 12000)}`;
+    return aiProvider.generate(prompt);
   }
 
   async repairKeywords(resumeText, missing, aiProvider) {
