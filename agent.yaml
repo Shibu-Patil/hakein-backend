@@ -3,9 +3,15 @@
 # Keys are NEVER written here — each agent points at an env var you set in .env.
 # Add your own entries freely: { provider, model, apiKeyEnv }. Whatever you list becomes choosable.
 
-active: gemini
+active: ollama-local
 
 agents:
+  # Fully local: Ollama on this machine, no key, no quota, no downloads needed.
+  # Requires `ollama serve` running. Change `model` to any name from `ollama list`.
+  ollama-local:
+    provider: ollama
+    model: qwen2.5-coder:14b
+
   gemini:
     provider: gemini
     model: gemini-3.5-flash
@@ -51,6 +57,6 @@ agents:
 # Per-job overrides. Each value must be a name from `agents`.
 # Omit a task (or the whole block) and it follows `active`.
 tasks:
-  resume: gemini
-  qa: gemini-flash
-  scoring: gemini
+  resume: ollama-local
+  qa: ollama-local
+  scoring: ollama-local

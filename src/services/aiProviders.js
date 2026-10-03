@@ -11,6 +11,8 @@ export class AIProviderFactory {
         return new AnthropicProvider(apiKey, model || 'claude-3-opus-20240229');
       case 'openrouter':
         return new OpenRouterProvider(apiKey, model || 'meta-llama/llama-3.1-70b-instruct');
+      case 'ollama':
+        return new OllamaProvider(apiKey, model || 'qwen2.5-coder:14b');
       default:
         throw new Error(`Unsupported provider: ${provider}`);
     }
@@ -154,6 +156,43 @@ class OpenRouterProvider extends BaseProvider {
     if (!data.choices?.[0]) throw friendlyModelError(new Error(`OpenRouter error: ${JSON.stringify(data).slice(0, 300)}`), this.model);
     const u = data.usage;
     this.lastUsage = u ? { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, total: u.total_tokens || 0 } : null;
+    return data.choices[0].message.content;
+  }
+}
+
+class OllamaProvider extends BaseProvider {
+  async generate(prompt) {
+    const base = (process.env.OLLAMA_HOST || 'http://localhost:11434').replace(/\/$/, '');
+    let response;
+    try {
+      response = await fetch(`${base}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: this.model,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: 4000,
+        stream: false,
+        options: { num_ctx: Number(process.env.OLLAMA_CTX || 16384) }
+      })
+      });
+    } catch (e) {
+      throw new Error(
+        `Cannot reach Ollama at ${base} (${e.cause?.code || e.message}). Start it with: ollama serve`
+      );
+    }
+    const data = await response.json().catch(() => ({}));
+    if (!data.choices?.[0]) {
+      const detail = typeof data?.error === 'string' ? data.error : JSON.stringify(data?.error || data).slice(0, 200);
+      throw new Error(
+        `Ollama error for model "${this.model}": ${detail}. Check 'ollama list' for exact names.`
+      );
+    }
+    const u = data.usage;
+    this.lastUsage = u
+      ? { input: u.prompt_tokens || 0, output: u.completion_tokens || 0, total: u.total_tokens || 0 }
+      : { input: 0, output: 0, total: 0, estimated: true };
     return data.choices[0].message.content;
   }
 }

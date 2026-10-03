@@ -34,10 +34,11 @@ export function resolveAgent(name) {
   const agentName = name || cfg.active;
   const entry = cfg.agents[agentName];
   if (!entry) throw new Error(`Unknown agent "${agentName}". Choices: ${Object.keys(cfg.agents).join(', ') || '(none)'}`);
-  if (!entry.provider || !entry.apiKeyEnv) {
-    throw new Error(`Agent "${agentName}" must set provider + apiKeyEnv in agent.yaml`);
+  if (!entry.provider) {
+    throw new Error(`Agent "${agentName}" must set provider in agent.yaml`);
   }
-  const apiKey = process.env[entry.apiKeyEnv];
+  // Local providers (ollama) need no key. Cloud providers need apiKeyEnv -> env.
+  const apiKey = entry.apiKeyEnv ? process.env[entry.apiKeyEnv] : 'local-no-key';
   if (!apiKey) {
     throw new Error(`Agent "${agentName}" needs ${entry.apiKeyEnv} set in .env`);
   }
@@ -68,7 +69,7 @@ export function listAgents() {
         {
           provider: e.provider,
           model: e.model,
-          keyConfigured: !!(e.apiKeyEnv && process.env[e.apiKeyEnv])
+          keyConfigured: !e.apiKeyEnv ? true : !!process.env[e.apiKeyEnv]
         }
       ])
     )
