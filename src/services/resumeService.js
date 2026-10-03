@@ -244,11 +244,18 @@ Return JSON with tailored resume sections:
 
   // --- Honesty enforcement (cannot be bypassed by prompt-ignoring models) ---
 
-  // Real experience span in years from profile dates (MM/YYYY supported).
+  // Real experience span in years from profile dates (MM/YYYY and Mon YYYY supported).
   profileYears(profile) {
+    const months = { jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5, jul: 6, aug: 7, sep: 8, sept: 8, oct: 9, nov: 10, dec: 11 };
     const parse = (s) => {
-      const m = String(s || '').match(/(\d{1,2})\/(\d{4})/);
-      return m ? new Date(+m[2], +m[1] - 1) : null;
+      const str = String(s || '');
+      let m = str.match(/(\d{1,2})\/(\d{4})/);
+      if (m) return new Date(+m[2], +m[1] - 1);
+      m = str.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\s+(\d{4})/i);
+      if (m) return new Date(+m[2], months[m[1].toLowerCase().slice(0, 4)] ?? 0);
+      m = str.match(/\b((19|20)\d{2})\b/);
+      if (m) return new Date(+m[1], 0);
+      return null;
     };
     let min = null;
     let max = null;
