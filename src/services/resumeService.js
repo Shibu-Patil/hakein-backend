@@ -11,6 +11,58 @@ export function sumUsage(steps = []) {
   return total;
 }
 
+const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim();
+
+// Split "SSO (Single Sign-On)" into alternatives: ["sso", "single sign on"].
+function alternatives(keyword) {
+  const parts = String(keyword).split(/[()/|]/).map(norm).filter(Boolean);
+  return parts.length ? parts : [norm(keyword)];
+}
+
+// Known equivalences: OAuth2/JWT proves SSO, monitoring proves observability, etc.
+const EQUIV = {
+  sso: ['sso', 'single sign on', 'oauth2', 'jwt', 'saml', 'sso single sign on'],
+  observability: ['observability', 'monitoring', 'logging', 'tracing', 'prometheus', 'grafana', 'elk'],
+  kubernetes: ['kubernetes', 'k8s'],
+  docker: ['docker', 'container', 'containerization'],
+  cicd: ['ci cd', 'cicd', 'ci/cd', 'pipeline'],
+  aws: ['aws', 'amazon web services', 'ec2', 's3', 'lambda'],
+  graphql: ['graphql', 'graph ql'],
+  typescript: ['typescript', 'ts'],
+  javascript: ['javascript', 'js', 'es6'],
+  nodejs: ['node js', 'nodejs', 'node'],
+  react: ['react', 'react js', 'reactjs', 'next js', 'nextjs'],
+};
+
+// Pure: which keywords are truly absent? Exact phrase, all-words, or known equivalent.
+export function findMissingKeywords(resumeText, keywords = []) {
+  const hay = ` ${norm(resumeText)} `;
+  const has = (term) => {
+    const t = norm(term);
+    if (!t) return false;
+    if (t.includes(' ')) return hay.includes(` ${t} `);
+    return hay.includes(` ${t} `) || hay.includes(` ${t}-`) || hay.includes(`-${t} `);
+  };
+  const missing = [];
+  for (const kw of keywords) {
+    const cands = new Set();
+    for (const a of alternatives(kw)) {
+      cands.add(a);
+      for (const w of a.split(' ')) {
+        if (EQUIV[w]) for (const e of EQUIV[w]) cands.add(e);
+      }
+      if (EQUIV[a]) for (const e of EQUIV[a]) cands.add(e);
+    }
+    const found = [...cands].some((c) => {
+      if (has(c)) return true;
+      const words = c.split(' ').filter((w) => w.length > 2);
+      return words.length > 0 && words.every(has);
+    });
+    if (!found) missing.push(kw);
+  }
+  return missing;
+}
+
 export class ResumeService {
   // Wrap one model call and record its token usage under `step`.
   async callWithUsage(aiProvider, step, bucket, fn) {
@@ -54,8 +106,17 @@ Return ONLY JSON:
       options
     ));
     const atsOptimized = await call('ats-optimize', () => this.optimizeForATS(tailoredContent, jobDescription, aiProvider));
-    const formatted = this.formatResume(atsOptimized, userProfile, options.format || 'ats');
-    const atsScore = await call('ats-score', () => this.calculateATSScore(formatted, jobDescription, aiProvider));
+    let formatted = this.formatResume(atsOptimized, userProfile, options.format || 'ats');
+    let atsScore = await call('ats-score', () => this.calculateATSScore(formatted, jobDescription, aiProvider));
+
+    // Repair loop: weave still-missing must-have keywords back in (max 2 rounds).
+    const mustHave = [...new Set([...(analysis.mustHaveKeywords || []), ...(analysis.keywords || [])])];
+    for (let round = 0; round < 2; round++) {
+      const missing = findMissingKeywords(formatted, mustHave).slice(0, 6);
+      if (!missing.length) break;
+      formatted = await call(`repair-${round + 1}`, () => this.repairKeywords(formatted, missing, aiProvider));
+      atsScore = await call(`ats-score-${round + 1}`, () => this.calculateATSScore(formatted, jobDescription, aiProvider));
+    }
 
     return {
       id: uuidv4(),
@@ -165,6 +226,20 @@ Return JSON with tailored resume sections:
 
     const response = await aiProvider.generate(prompt);
     return this.parseJSON(response);
+  }
+
+  async repairKeywords(resumeText, missing, aiProvider) {
+    const prompt = `This resume is missing these required keywords: ${missing.join(', ')}.
+
+RESUME:
+${String(resumeText).slice(0, 12000)}
+
+RULES:
+- Weave EACH missing keyword into the resume naturally (summary, an existing bullet, or skills). Skills may be added.
+- Change nothing else. Keep every section, date, and bullet intact.
+- Experience years stay as-is (max +1 rounding already applied).
+Return the FULL updated resume text, nothing else.`;
+    return aiProvider.generate(prompt);
   }
 
   async optimizeForATS(content, jobDescription, aiProvider) {

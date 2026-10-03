@@ -253,3 +253,16 @@ describe('tokens + model errors', () => {
     assert.equal(e404.status, 502);
   });
 });
+
+describe('keywords - variant matching', () => {
+  it('counts variants as present', async () => {
+    const { findMissingKeywords } = await import('../src/services/resumeService.js');
+    const resume = 'Built OAuth2 and JWT auth. Did log monitoring on Linux.';
+    const missing = findMissingKeywords(resume, ['SSO (Single Sign-On)', 'Observability', 'Linux', 'Kubernetes']);
+    assert.deepEqual(missing, ['Kubernetes']);
+  });
+  it('flags truly absent keywords', async () => {
+    const { findMissingKeywords } = await import('../src/services/resumeService.js');
+    assert.deepEqual(findMissingKeywords('React developer', ['React', 'GraphQL']), ['GraphQL']);
+  });
+});
