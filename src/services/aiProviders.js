@@ -163,23 +163,33 @@ class OpenRouterProvider extends BaseProvider {
 class OllamaProvider extends BaseProvider {
   async generate(prompt) {
     const base = (process.env.OLLAMA_HOST || 'http://localhost:11434').replace(/\/$/, '');
-    let response;
-    try {
-      response = await fetch(`${base}/v1/chat/completions`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: this.model,
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: 4000,
-        stream: false,
-        options: { num_ctx: Number(process.env.OLLAMA_CTX || 16384) }
-      })
-      });
-    } catch (e) {
+    // Local server handles one big job at a time: retry patiently (up to ~6 min).
+    let response = null;
+    let lastErr = null;
+    for (const wait of [0, 15000, 30000, 60000, 120000]) {
+      if (wait) await sleep(wait);
+      try {
+        response = await withTimeout(fetch(`${base}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: this.model,
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+            max_tokens: 4000,
+            stream: false,
+            options: { num_ctx: Number(process.env.OLLAMA_CTX || 16384) }
+          })
+        }), 300000);
+        lastErr = null;
+        break;
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    if (!response) {
       throw new Error(
-        `Cannot reach Ollama at ${base} (${e.cause?.code || e.message}). Start it with: ollama serve`
+        `Ollama at ${base} stayed unreachable after retries (${lastErr?.cause?.code || lastErr?.message}). Start it with: ollama serve. Tip: run only one tailor at a time locally.`
       );
     }
     const data = await response.json().catch(() => ({}));
