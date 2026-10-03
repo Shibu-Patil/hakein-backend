@@ -17,6 +17,7 @@ console.log('AGENT:', ai.model);
 const svc = new ResumeService();
 const out = await svc.tailorFromResumeText(resumeText, jd, ai, { format: 'ats' });
 console.log('ATS SCORE:', out.atsScore?.score);
+console.log('HONESTY:', JSON.stringify(out.honesty));
 console.log('TOKENS:', JSON.stringify(out.usage?.total));
 console.log('MISSING:', JSON.stringify(out.atsScore?.missingKeywords));
 await writeFile(`/tmp/tailored-${which}.txt`, out.resume);

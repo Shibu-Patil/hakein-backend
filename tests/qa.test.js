@@ -295,4 +295,18 @@ describe('honesty - code enforcement', () => {
     const ok = svc.checkHonesty('Dev | AMGO Games | 01/2022 - Present', profile);
     assert.equal(ok.violations.length, 0);
   });
+  it('ignores contact, education, tech and date-only lines', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    const profile = { experience: [{ company: 'AMGO', startDate: '01/2022', endDate: 'Present' }] };
+    const text = [
+      'a@b.com | +91 999 | City | github.com/x',
+      'Dev | AMGO | 01/2022 - Present',
+      'Jun 2017 - Dec 2019',
+      'B.Tech | College of X | 2018 - 2021',
+      'Proj | React, AWS, Docker'
+    ].join('\n');
+    const r = svc.checkHonesty(text, profile);
+    assert.equal(r.violations.length, 0);
+  });
 });

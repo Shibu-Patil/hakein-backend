@@ -123,7 +123,7 @@ Return ONLY JSON:
     const honesty = this.checkHonesty(formatted, userProfile);
     let honestyFixed = false;
     if (honesty.violations.length) {
-      formatted = await call('honesty-fix', () => this.fixHonesty(formatted, honesty.violations, aiProvider));
+      formatted = await call('honesty-fix', () => this.fixHonesty(formatted, honesty.violations, userProfile, aiProvider));
       honestyFixed = true;
       const recheck = this.checkHonesty(formatted, userProfile);
       honesty.violations = recheck.violations;
@@ -275,6 +275,7 @@ Return JSON with tailored resume sections:
   }
 
   // Pure gate: returns violations[]; empty means clean.
+  // Only job-header lines count: must contain a year/Present, not be contact/education/tech.
   checkHonesty(resumeText, userProfile) {
     const violations = [];
     const real = this.profileYears(userProfile);
@@ -282,32 +283,44 @@ Return JSON with tailored resume sections:
     if (real > 0 && claimed > Math.floor(real) + 1) {
       violations.push(`experience inflation: claims ${claimed}y, profile supports max ${Math.floor(real) + 1}y`);
     }
-    const known = new Set((userProfile?.experience || []).map((e) => String(e.company || '').toLowerCase().trim()).filter(Boolean));
-    const lines = String(resumeText || '').split('\n');
-    for (const line of lines) {
-      // Employer lines look like "Role | Company | dates" or "Role\nCompany | dates"
+    const known = (userProfile?.experience || []).map((e) => String(e.company || '').toLowerCase().trim()).filter(Boolean);
+    const stripDates = (s) => String(s)
+      .replace(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/gi, '')
+      .replace(/\d{1,2}\/\d{4}|(19|20)\d{2}|present/gi, '')
+      .replace(/[-–—]/g, ' ').replace(/\s+/g, ' ').trim().toLowerCase();
+    const skipLine = (line) => /@|http|\.com|\+\d|bachelor|master|phd|college|university|school|institute|\bb\.?\s?tech\b|\bm\.?\s?tech\b|degree|gpa|certification/i.test(line);
+    for (const line of String(resumeText || '').split('\n')) {
+      if (!/\b((19|20)\d{2}|present)\b/i.test(line)) continue; // no date anchor: not a job header
+      if (!line.includes('|') || skipLine(line)) continue;
       const parts = line.split('|').map((s) => s.trim()).filter(Boolean);
-      if (parts.length >= 2) {
-        for (const part of parts.slice(1)) {
-          const noDates = part.replace(/\d{1,2}\/\d{4}|present|20\d{2}/gi, '').replace(/[-–—]/g, ' ').trim().toLowerCase();
-          if (noDates.length > 3 && ![...known].some((k) => noDates.includes(k) || (k.length > 4 && k.includes(noDates)))) {
-            violations.push(`unknown employer: "${part.trim()}" not in profile`);
-          }
+      for (const part of parts.slice(1)) {
+        const cand = stripDates(part);
+        if (cand.length < 4) continue; // pure date fragment
+        if (/^[\d\s.,]+$/.test(cand)) continue; // phone/location/numbers
+        if (!known.some((k) => cand.includes(k) || (k.length > 4 && k.includes(cand)))) {
+          violations.push(`unknown employer: "${part.trim()}" not in profile`);
         }
       }
     }
     return { violations: [...new Set(violations)], realYears: Math.floor(real), claimedYears: claimed };
   }
 
-  async fixHonesty(resumeText, violations, aiProvider) {
-    const prompt = `Fix ONLY these honesty violations in the resume below. Change nothing else — same sections, bullets, keywords, dates (except corrected ones).
+  async fixHonesty(resumeText, violations, userProfile, aiProvider) {
+    const allowed = (userProfile?.experience || [])
+      .map((e) => `${e.role || 'role'} @ ${e.company} (${e.startDate || ''} - ${e.endDate || ''})`)
+      .filter(Boolean)
+      .join('\n');
+    const prompt = `Fix ONLY these honesty violations in the resume below. Change nothing else — same sections, bullets, keywords.
 
 VIOLATIONS:
 ${violations.map((v) => `- ${v}`).join('\n')}
 
+THE CANDIDATE'S ONLY REAL EMPLOYERS (use exactly these, nothing else):
+${allowed || '(none listed — keep existing employers as-is and only fix year numbers)'}
+
 RULES:
 - Experience claims must not exceed profile truth +1 year. Lower inflated numbers to the allowed max.
-- Employers not in the candidate's real history must be replaced with the real employers and their real roles.
+- Any employer block naming a company NOT in the list above must be rewritten to the closest real employer from the list, keeping the JD-relevant wording of the bullets.
 - Keep every keyword, skill, and section intact.
 Return the FULL corrected resume text, nothing else.
 
