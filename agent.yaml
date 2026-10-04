@@ -22,6 +22,12 @@ agents:
     model: gemini-1.5-flash
     apiKeyEnv: GEMINI_API_KEY
 
+  # Cheap + reliable vision for captcha screenshots (separate quota from resume models).
+  gemini-vision:
+    provider: gemini
+    model: gemini-3.5-flash-lite
+    apiKeyEnv: GEMINI_API_KEY
+
   openai:
     provider: openai
     model: gpt-4-turbo-preview
@@ -63,3 +69,4 @@ tasks:
   resume: gemini
   qa: gemini
   scoring: gemini
+  vision: gemini-vision

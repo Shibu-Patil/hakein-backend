@@ -78,6 +78,102 @@ export async function readCaptchaText(screenshotB64, mime = 'image/png') {
   return String(text || '').replace(/[^A-Za-z0-9]/g, '').slice(0, 12);
 }
 
+// ---- Agentic fallback: LLM writes a Playwright script, we run it ----
+
+// Ask the vision model to WRITE a solving script for this exact screen.
+// Returns raw JS using only `page` + `sleep(ms)`. No imports, no navigation.
+export async function generateSolveScript(screenshotB64, pageSummary, mime = 'image/png') {
+  const { ai } = await resolveVisionAI();
+  const question = `You are a browser-automation expert. Look at this screenshot of a login/bot-check screen and WRITE a Playwright script to get past it.
+
+PAGE CONTEXT:
+${String(pageSummary || '').slice(0, 1500)}
+
+RULES:
+- Use ONLY: page.locator(), page.getByRole(), page.mouse, page.keyboard, sleep(ms).
+- NO require/import/process/fs/eval/navigation/reload/goto/close.
+- Prefer: click checkboxes, fill visible code/text inputs, click Verify/Submit, drag sliders.
+- Keep it under 25 lines. No explanations.
+Reply with ONLY the JS code, no markdown fences.`;
+  const text = await visionAsk(ai, question, screenshotB64, mime);
+  return String(text || '')
+    .replace(/```(javascript|js)?/gi, '')
+    .replace(/```/g, '')
+    .trim()
+    .slice(0, 4000);
+}
+
+const BANNED = [/require\s*\(/, /import\s*\(/, /\bprocess\b/, /\bchild_process\b/, /\bfs\b/, /\beval\s*\(/, /Function\s*\(/, /\.goto\s*\(/, /\.close\s*\(/, /reload\s*\(/, /setContent\s*\(/, /evaluate\s*\(/];
+
+// Safety gate for LLM-written scripts.
+export function validateSolveScript(code) {
+  if (!code || code.length < 10) return 'empty script';
+  for (const re of BANNED) {
+    if (re.test(code)) return `banned pattern: ${re}`;
+  }
+  if (!code.includes('page.')) return 'script never touches page';
+  return null;
+}
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+
+// Run LLM-written code with a hard timeout. Resolves true if no throw.
+export async function runSolveScript(page, code, timeoutMs = 45000) {
+  const problem = validateSolveScript(code);
+  if (problem) return { ran: false, error: problem };
+  const fn = new AsyncFunction('page', 'sleep', code);
+  try {
+    await Promise.race([
+      fn(page, sleep),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('script timeout')), timeoutMs))
+    ]);
+    return { ran: true };
+  } catch (e) {
+    return { ran: false, error: String(e.message).slice(0, 200) };
+  }
+}
+
+// Full agentic attempt: screenshot -> LLM writes script -> run -> caller re-checks.
+export async function agenticSolve(page, { rounds = 2 } = {}) {
+  const notes = [];
+  for (let i = 0; i < rounds; i++) {
+    let shot;
+    try {
+      shot = (await page.screenshot({ timeout: 15000 })).toString('base64');
+    } catch (e) {
+      return { solved: false, details: `screenshot failed: ${e.message}` };
+    }
+    let summary = '';
+    try {
+      summary = `URL: ${page.url()}\n` + (await page.locator('body').innerText({ timeout: 8000 }).catch(() => '')).slice(0, 1200);
+    } catch { /* ignore */ }
+    let code;
+    try {
+      code = await generateSolveScript(shot, summary);
+    } catch (e) {
+      return { solved: false, details: `script generation failed (vision): ${String(e.message).slice(0, 150)}` };
+    }
+    const problem = validateSolveScript(code);
+    if (problem) {
+      notes.push(`round${i + 1}:rejected(${problem})`);
+      continue;
+    }
+    const run = await runSolveScript(page, code);
+    notes.push(`round${i + 1}:${run.ran ? 'ran' : 'error:' + run.error}`);
+    await sleep(3000);
+    try {
+      const bodyText = (await page.locator('body').innerText({ timeout: 8000 }).catch(() => '')).toLowerCase();
+      const url = page.url();
+      if (!/captcha|challenge|verification|verify your identity|unusual/i.test(bodyText) && !/challenge|checkpoint/i.test(url)) {
+        return { solved: true, details: `agentic script worked (${notes.join(',')})` };
+      }
+    } catch { /* re-loop */ }
+  }
+  return { solved: false, details: `agentic attempts failed (${notes.join(',')})` };
+}
+
 // Single vision Q&A turn. Supports gemini (inlineData), openai/openrouter
 // (image_url), anthropic (base64 source). Falls back to text-only otherwise.
 async function visionAsk(ai, question, b64, mime) {
@@ -222,14 +318,14 @@ export async function solveChallenge(page, { maxRounds = 3, gmailAccount = null 
           await page.waitForTimeout(3000);
           continue; // re-check: checkbox often leads to image challenge next
         }
-        return { solved: false, details: 'checkbox not clickable' };
+        return agenticSolve(page, { rounds: 2 });
       }
       if (kind.type === 'text') {
         if (await solveTextCaptcha(page, shot)) {
           await page.waitForTimeout(2500);
           continue;
         }
-        return { solved: false, details: 'text captcha fill failed' };
+        return agenticSolve(page, { rounds: 2 });
       }
       if (kind.type === 'image-select') {
         const done = await solveImageGrid(page, shot, kind);
@@ -237,16 +333,18 @@ export async function solveChallenge(page, { maxRounds = 3, gmailAccount = null 
           await page.waitForTimeout(2500);
           continue;
         }
-        return { solved: false, details: 'image grid solve failed' };
+        return agenticSolve(page, { rounds: 2 });
       }
       if (kind.type === 'slider') {
         if (await trySlider(page)) {
           await page.waitForTimeout(2500);
           continue;
         }
-        return { solved: false, details: 'slider needs a human (drag varies per challenge)' };
+        // Built-in drag failed — let the LLM write a custom script for this slider.
+        return agenticSolve(page, { rounds: 2 });
       }
-      return { solved: false, details: `unhandled challenge: ${kind.type} (${kind.instruction || ''})`.slice(0, 200) };
+      // Unknown/custom challenge — LLM writes a bespoke Playwright script for it.
+      return agenticSolve(page, { rounds: 2 });
     } catch (e) {
       return { solved: false, details: `solve error: ${String(e.message).slice(0, 150)}` };
     }

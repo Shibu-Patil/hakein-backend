@@ -370,3 +370,19 @@ describe('gmail - per-user account resolution', () => {
     assert.equal(resolveGmailAccount({}), null);
   });
 });
+
+describe('captcha - agentic script gate (no network)', () => {
+  it('rejects dangerous scripts', async () => {
+    const { validateSolveScript } = await import('../src/services/captchaSolver.js');
+    assert.ok(validateSolveScript(''));
+    assert.ok(validateSolveScript('const x = require("fs");'));
+    assert.ok(validateSolveScript('await page.goto("https://evil.com")'));
+    assert.ok(validateSolveScript('await page.evaluate(() => 1)'));
+    assert.ok(validateSolveScript('console.log("hi")'));
+  });
+  it('accepts legit interaction scripts', async () => {
+    const { validateSolveScript } = await import('../src/services/captchaSolver.js');
+    assert.equal(validateSolveScript('await page.getByRole("checkbox").first().click();\nawait sleep(2000);'), null);
+    assert.equal(validateSolveScript('await page.locator("input").first().fill("abc123");\nawait page.keyboard.press("Enter");'), null);
+  });
+});

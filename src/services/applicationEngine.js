@@ -27,7 +27,8 @@ async function newPage() {
 
 // ---------- login flows ----------
 
-export async function loginLinkedIn(page, { email, password, gmailAccount = null }) {
+export async function loginLinkedIn(page, { email, password, gmailAccount = null, userId = null }) {
+  const loginUserId = userId;
   await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(2500);
   // LinkedIn randomizes field ids AND renders hidden duplicate forms — locate by type, visible only.
@@ -47,13 +48,13 @@ export async function loginLinkedIn(page, { email, password, gmailAccount = null
   await passField.pressSequentially(password, { delay: 40 });
   await page.waitForTimeout(800);
   // Submit button has no type=submit anymore — click by name, else Enter.
-  const signIn = page.getByRole('button', { name: /sign in/i }).first();
-  if (await signIn.isVisible().catch(() => false)) {
-    await signIn.click();
-  } else {
-    await passField.press('Enter');
+  // NOTE: clicking Sign in gets silently swallowed as bot-like; Enter submits reliably.
+  await passField.press('Enter');
+  // Challenge redirect can take 5-15s — poll for URL change instead of one fixed wait.
+  for (let i = 0; i < 10; i++) {
+    await page.waitForTimeout(2000);
+    if (!page.url().endsWith('/login') && !page.url().endsWith('/login/')) break;
   }
-  await page.waitForTimeout(4000);
   const html = await page.content().catch(() => '');
   const blocker = detectBlockerPage(page.url(), html);
   if (blocker) {
@@ -70,7 +71,23 @@ export async function loginLinkedIn(page, { email, password, gmailAccount = null
       return { ok: false, error: `LinkedIn ${blocker} (solver unavailable: ${String(e.message).slice(0, 120)}).` };
     }
   }
-  return finishLinkedInLogin(page, html);
+  const result = await finishLinkedInLogin(page, html);
+  // Persist session cookies so next run skips password login entirely (fewer flags).
+  if (result.ok && loginUserId) {
+    try {
+      const cookies = await page.context().cookies('https://www.linkedin.com');
+      const keep = cookies
+        .filter((c) => /^(li_at|JSESSIONID|liap|bcookie|bscookie|lidc)$/.test(c.name))
+        .map((c) => ({ name: c.name, value: c.value, domain: c.domain || '.linkedin.com', path: c.path || '/' }));
+      if (keep.length) {
+        const { connectDb } = await import('../lib/db.js');
+        const { User } = await import('../models/index.js');
+        await connectDb().catch(() => {});
+        await User.findByIdAndUpdate(loginUserId, { $set: { linkedinToken: JSON.stringify(keep) } }).catch(() => {});
+      }
+    } catch { /* best effort */ }
+  }
+  return result;
 }
 
 async function finishLinkedInLogin(page, html) {
