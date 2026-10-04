@@ -168,12 +168,31 @@ export async function runSolveScript(page, code, timeoutMs = 45000) {
 }
 
 // Full agentic attempt: screenshot -> LLM writes script -> run -> caller re-checks.
-export async function agenticSolve(page, { rounds = 2 } = {}) {
+export async function agenticSolve(page, { rounds = 2, debugDir = null } = {}) {
   const notes = [];
+  // Evidence on by default (timestamped tmp dir); opt out with CAPTCHA_DEBUG=0.
+  // Each attempt keeps: screenshot seen, script written, result, screenshot after.
+  let dbg = debugDir || process.env.CAPTCHA_DEBUG_DIR || null;
+  if (!dbg && process.env.CAPTCHA_DEBUG !== '0') {
+    try {
+      const { tmpdir } = await import('node:os');
+      dbg = `${tmpdir()}/hakein-captcha-${Date.now()}`;
+    } catch { dbg = null; }
+  }
+  async function snap(tag, data) {
+    if (!dbg) return;
+    try {
+      const { mkdir, writeFile } = await import('node:fs/promises');
+      await mkdir(dbg, { recursive: true });
+      if (data?.png) await writeFile(`${dbg}/${tag}.png`, Buffer.from(data.png, 'base64'));
+      if (data?.text != null) await writeFile(`${dbg}/${tag}.txt`, String(data.text).slice(0, 6000));
+    } catch { /* best effort */ }
+  }
   for (let i = 0; i < rounds; i++) {
     let shot;
     try {
       shot = (await page.screenshot({ timeout: 15000 })).toString('base64');
+      await snap(`round${i + 1}-seen`, { png: shot });
     } catch (e) {
       return { solved: false, details: `screenshot failed: ${e.message}` };
     }
@@ -188,12 +207,18 @@ export async function agenticSolve(page, { rounds = 2 } = {}) {
       return { solved: false, details: `script generation failed (vision): ${String(e.message).slice(0, 150)}` };
     }
     const problem = validateSolveScript(code);
+    await snap(`round${i + 1}-script`, { text: (problem ? `REJECTED: ${problem}\n` : '') + code });
     if (problem) {
       notes.push(`round${i + 1}:rejected(${problem})`);
       continue;
     }
     const run = await runSolveScript(page, code);
     notes.push(`round${i + 1}:${run.ran ? 'ran' : 'error:' + run.error}`);
+    await snap(`round${i + 1}-result`, { text: notes[notes.length - 1] });
+    try {
+      const after = (await page.screenshot({ timeout: 15000 })).toString('base64');
+      await snap(`round${i + 1}-after`, { png: after });
+    } catch { /* ignore */ }
     await sleep(3000);
     try {
       const bodyText = (await page.locator('body').innerText({ timeout: 8000 }).catch(() => '')).toLowerCase();

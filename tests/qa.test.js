@@ -394,3 +394,36 @@ describe('captcha - coordinate tools (no network)', () => {
     assert.equal(validateSolveScript('await typeAt(200, 300, "483920");'), null);
   });
 });
+
+describe('captcha - script runner (no network)', () => {
+  async function stubPage() {
+    const calls = [];
+    return {
+      calls,
+      mouse: {
+        move: async (x, y) => { calls.push(['move', Math.round(x), Math.round(y)]); },
+        click: async (x, y) => { calls.push(['click', Math.round(x), Math.round(y)]); },
+        down: async () => { calls.push(['down']); },
+        up: async () => { calls.push(['up']); }
+      },
+      keyboard: { pressSequentially: async (t) => { calls.push(['type', t]); }, press: async (k) => { calls.push(['press', k]); } },
+      viewportSize: () => ({ width: 1000, height: 800 }),
+      waitForTimeout: async (ms) => { calls.push(['wait', ms]); }
+    };
+  }
+  it('executes clickAt/typeAt scripts against a stub page', async () => {
+    const { runSolveScript } = await import('../src/services/captchaSolver.js');
+    const page = await stubPage();
+    const r = await runSolveScript(page, 'await clickAt(500, 250);\nawait typeAt(100, 100, "483920");', 5000);
+    assert.equal(r.ran, true);
+    assert.ok(page.calls.some((c) => c[0] === 'click' && c[1] === 500 && c[2] === 200));
+    assert.ok(page.calls.some((c) => c[0] === 'type' && c[1] === '483920'));
+  });
+  it('times out runaway scripts', async () => {
+    const { runSolveScript } = await import('../src/services/captchaSolver.js');
+    const page = await stubPage();
+    const r = await runSolveScript(page, 'while (true) { await clickAt(1, 1); }', 300);
+    assert.equal(r.ran, false);
+    assert.ok(/timeout/.test(r.error));
+  });
+});
