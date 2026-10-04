@@ -16,6 +16,7 @@ function fmt(doc) {
 function maskCreds(u) {
   if (u.naukriPassword) u.naukriPassword = '***';
   if (u.linkedinPassword) u.linkedinPassword = '***';
+  if (u.gmailAppPassword) u.gmailAppPassword = '***';
   return u;
 }
 
@@ -40,7 +41,9 @@ usersRoutes.post('/', async (req, res, next) => {
       naukriEmail: Joi.string().optional(),
       naukriPassword: Joi.string().optional(),
       linkedinEmail: Joi.string().optional(),
-      linkedinPassword: Joi.string().optional()
+      linkedinPassword: Joi.string().optional(),
+      gmailUser: Joi.string().email().optional(),
+      gmailAppPassword: Joi.string().optional()
     });
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
@@ -55,6 +58,8 @@ usersRoutes.post('/', async (req, res, next) => {
     if (value.naukriPassword) data.naukriPassword = encrypt(value.naukriPassword);
     if (value.linkedinEmail) data.linkedinEmail = value.linkedinEmail;
     if (value.linkedinPassword) data.linkedinPassword = encrypt(value.linkedinPassword);
+    if (value.gmailUser) data.gmailUser = value.gmailUser;
+    if (value.gmailAppPassword) data.gmailAppPassword = encrypt(value.gmailAppPassword);
 
     await connectDb();
     const user = await User.findOneAndUpdate(
@@ -87,7 +92,9 @@ usersRoutes.patch('/:id/credentials', async (req, res, next) => {
       linkedinEmail: Joi.string().optional(),
       linkedinPassword: Joi.string().optional(),
       naukriEmail: Joi.string().optional(),
-      naukriPassword: Joi.string().optional()
+      naukriPassword: Joi.string().optional(),
+      gmailUser: Joi.string().email().optional(),
+      gmailAppPassword: Joi.string().optional()
     }).min(1);
     const { error, value } = schema.validate(req.body);
     if (error) return res.status(400).json({ error: error.details[0].message });
@@ -96,6 +103,8 @@ usersRoutes.patch('/:id/credentials', async (req, res, next) => {
     if (value.linkedinPassword) data.linkedinPassword = encrypt(value.linkedinPassword);
     if (value.naukriEmail) data.naukriEmail = value.naukriEmail;
     if (value.naukriPassword) data.naukriPassword = encrypt(value.naukriPassword);
+    if (value.gmailUser) data.gmailUser = value.gmailUser;
+    if (value.gmailAppPassword) data.gmailAppPassword = encrypt(value.gmailAppPassword);
     await connectDb();
     await User.findByIdAndUpdate(req.params.id, { $set: data });
     res.json({ ok: true, message: 'Credentials saved (encrypted). Passwords are never returned.' });

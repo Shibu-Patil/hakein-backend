@@ -16,6 +16,8 @@ const UserSchema = new Schema(
     linkedinPassword: String,
     naukriEmail: String,
     naukriPassword: String,
+    gmailUser: String,
+    gmailAppPassword: String,
     qaProfile: { type: Schema.Types.Mixed }
   },
   { timestamps: true }

@@ -53,19 +53,22 @@ async function alertTick() {
     const redis = getRedis();
     if (!redis) return;
     const { fetchAlertLinks } = await import('../src/services/alertIngest.js');
+    const { resolveGmailAccount } = await import('../src/services/notify.js');
     const { Job } = await import('../src/models/index.js');
-    const { links } = await fetchAlertLinks({ max: 20 });
-    if (!links?.length) return;
     await connectDb();
     const users = await User.find({}).limit(500).lean();
     const auto = users.filter((u) => u.preferences?.autoApply);
     if (!auto.length) return;
     const queue = new Queue('hakein-jobs', { connection: redis });
     let queued = 0;
-    for (const link of links) {
-      const exists = await Job.findOne({ source: link.source, externalId: link.externalId }).lean();
-      if (exists) continue;
-      for (const u of auto) {
+    // Each user's OWN mailbox (DB creds first, server env fallback).
+    for (const u of auto) {
+      const acct = resolveGmailAccount(u);
+      if (!acct) continue;
+      const { links } = await fetchAlertLinks({ max: 20, imapUser: acct.user, imapPass: acct.pass }).catch(() => ({ links: [] }));
+      for (const link of links || []) {
+        const exists = await Job.findOne({ source: link.source, externalId: link.externalId }).lean();
+        if (exists) continue;
         await queue.add('instant-apply', {
           userId: String(u._id),
           jobUrl: link.url,

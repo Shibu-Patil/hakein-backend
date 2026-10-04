@@ -144,12 +144,15 @@ export function cellCenter(cell, box, rows, cols) {
 
 // Email verification codes (LinkedIn "enter the code we emailed you").
 // Reads the code from the user's own Gmail via IMAP and fills it. No human needed.
-export async function solveEmailCode(page) {
-  const user = process.env.GMAIL_USER;
-  const pass = process.env.GMAIL_APP_PASSWORD;
-  if (!user || !pass) {
-    return { solved: false, details: 'email-code challenge needs GMAIL_USER + GMAIL_APP_PASSWORD in backend .env' };
+// account: { user, pass } — pass explicitly (per-user DB creds) or falls back to server env.
+export async function solveEmailCode(page, account) {
+  const { resolveGmailAccount } = await import('./notify.js');
+  const acct = account || resolveGmailAccount(null);
+  if (!acct?.user || !acct?.pass) {
+    return { solved: false, details: 'email-code challenge needs Gmail: save app password in Setup, or set GMAIL_USER + GMAIL_APP_PASSWORD in backend .env' };
   }
+  const user = acct.user;
+  const pass = acct.pass;
   const { ImapFlow } = await import('imapflow');
   const client = new ImapFlow({ host: 'imap.gmail.com', port: 993, secure: true, auth: { user, pass }, logger: false });
   await client.connect();
@@ -184,15 +187,16 @@ export async function solveEmailCode(page) {
 }
 
 // Main entry: look at the page, solve what can be solved. Returns { solved, details }.
-export async function solveChallenge(page, { maxRounds = 3 } = {}) {
+// Pass gmailAccount ({ user, pass }) so multi-user setups read the RIGHT mailbox.
+export async function solveChallenge(page, { maxRounds = 3, gmailAccount = null } = {}) {
   // Cheap text check first: email-code challenges don't need vision.
   try {
     const bodyText = (await page.locator('body').innerText({ timeout: 8000 }).catch(() => '')).toLowerCase();
     if (/verification code/.test(bodyText) && /email/.test(bodyText)) {
-      const r = await solveEmailCode(page);
+      const r = await solveEmailCode(page, gmailAccount);
       if (r.solved) return r;
       // fall through to vision rounds for other challenge types
-      if (/gmail_user|gmail_app/i.test(r.details)) return r;
+      if (/gmail|app password/i.test(r.details)) return r;
     }
   } catch { /* continue to vision */ }
   const notes = [];

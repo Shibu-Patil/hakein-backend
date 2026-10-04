@@ -2,6 +2,7 @@
 // Runs SERVER-SIDE (Node + Playwright). iOS/Windows clients call the HTTP API only.
 
 import { resolveCredentials, detectBlockerPage } from './auth.js';
+import { resolveGmailAccount } from './notify.js';
 import { answerQuestion } from './qaService.js';
 
 let chromium = null;
@@ -26,7 +27,7 @@ async function newPage() {
 
 // ---------- login flows ----------
 
-export async function loginLinkedIn(page, { email, password }) {
+export async function loginLinkedIn(page, { email, password, gmailAccount = null }) {
   await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(2500);
   // LinkedIn randomizes field ids AND renders hidden duplicate forms — locate by type, visible only.
@@ -59,7 +60,7 @@ export async function loginLinkedIn(page, { email, password }) {
     // Try vision-solving the challenge (screenshot -> LLM -> click/type), then re-check.
     try {
       const { solveChallenge } = await import('./captchaSolver.js');
-      const solved = await solveChallenge(page, { maxRounds: 3 });
+      const solved = await solveChallenge(page, { maxRounds: 3, gmailAccount: gmailAccount || resolveGmailAccount(null) });
       const html2 = await page.content().catch(() => '');
       if (solved.solved && !detectBlockerPage(page.url(), html2)) {
         return await finishLinkedInLogin(page);
@@ -82,7 +83,7 @@ async function finishLinkedInLogin(page, html) {
   return { ok: true };
 }
 
-export async function loginNaukri(page, { email, password }) {
+export async function loginNaukri(page, { email, password, gmailAccount = null }) {
   await page.goto('https://www.naukri.com/nlogin/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
   await page.waitForTimeout(2000);
   // Naukri login form: username field + password field
@@ -99,7 +100,7 @@ export async function loginNaukri(page, { email, password }) {
   if (html.toLowerCase().includes('captcha')) {
     try {
       const { solveChallenge } = await import('./captchaSolver.js');
-      const solved = await solveChallenge(page, { maxRounds: 3 });
+      const solved = await solveChallenge(page, { maxRounds: 3, gmailAccount: gmailAccount || resolveGmailAccount(null) });
       const html2 = await page.content().catch(() => '');
       if (solved.solved && !html2.toLowerCase().includes('captcha')) return { ok: true };
       return { ok: false, error: `Naukri captcha unsolved (${solved.details}). Retry later or login manually once.` };
@@ -396,9 +397,11 @@ export async function applyToJob({ job, resumePdfBuffer, resumeText, user, crede
       resumeText: resumeText || answerCtx.resumeText || '',
       aiProvider: answerCtx.aiProvider || null
     };
+    const gmailAccount = resolveGmailAccount(user);
     if (job.source === 'linkedin') {
       const creds = credentials.linkedin || resolveCredentials(user, 'linkedin');
       if (!creds) return { success: false, error: 'LinkedIn credentials missing. Save LinkedIn email+password for the user or set LINKEDIN_EMAIL/LINKEDIN_PASSWORD.' };
+      creds.gmailAccount = creds.gmailAccount || gmailAccount;
       // Optional session-cookie fast path
       if (process.env.LINKEDIN_LI_AT && !creds.forcePassword) {
         await page.context().addCookies([{ name: 'li_at', value: process.env.LINKEDIN_LI_AT, domain: '.linkedin.com', path: '/' }]);
@@ -417,6 +420,7 @@ export async function applyToJob({ job, resumePdfBuffer, resumeText, user, crede
     if (job.source === 'naukri') {
       const creds = credentials.naukri || resolveCredentials(user, 'naukri');
       if (!creds) return { success: false, error: 'Naukri credentials missing. Save Naukri email+password for the user or set NAUKRI_EMAIL/NAUKRI_PASSWORD.' };
+      creds.gmailAccount = creds.gmailAccount || gmailAccount;
       const login = await loginNaukri(page, creds);
       if (!login.ok) return { success: false, error: login.error };
       return await applyNaukriDirect(page, { job, answerCtx: ctx });
@@ -430,11 +434,11 @@ export async function applyToJob({ job, resumePdfBuffer, resumeText, user, crede
 }
 
 // Quick credential check without applying (used by tests + API)
-export async function verifyCredentials(platform, { email, password }) {
+export async function verifyCredentials(platform, { email, password, gmailAccount = null }) {
   const { browser, page } = await newPage();
   try {
-    if (platform === 'linkedin') return await loginLinkedIn(page, { email, password });
-    if (platform === 'naukri') return await loginNaukri(page, { email, password });
+    if (platform === 'linkedin') return await loginLinkedIn(page, { email, password, gmailAccount });
+    if (platform === 'naukri') return await loginNaukri(page, { email, password, gmailAccount });
     return { ok: false, error: `Unknown platform: ${platform}` };
   } finally {
     await browser.close().catch(() => {});

@@ -1,25 +1,43 @@
 import nodemailer from 'nodemailer';
+import { decrypt } from '../lib/crypto.js';
 
-let transporter = null;
-
-function getTransporter() {
-  if (transporter) return transporter;
-  const user = process.env.GMAIL_USER;
-  const pass = process.env.GMAIL_APP_PASSWORD;
-  if (!user || !pass) return null;
-  transporter = nodemailer.createTransport({
-    service: 'gmail',
-    auth: { user, pass }
-  });
-  return transporter;
+// Per-user Gmail account: user's own encrypted DB creds first, server env as fallback.
+// Returns { user, pass } or null.
+export function resolveGmailAccount(user) {
+  try {
+    if (user?.gmailUser) {
+      const pass = user.gmailAppPassword
+        ? (() => { try { return decrypt(user.gmailAppPassword); } catch { return null; } })()
+        : null;
+      if (pass) return { user: user.gmailUser, pass, owner: 'user' };
+    }
+  } catch { /* fall through to env */ }
+  if (process.env.GMAIL_USER && process.env.GMAIL_APP_PASSWORD) {
+    return { user: process.env.GMAIL_USER, pass: process.env.GMAIL_APP_PASSWORD, owner: 'server' };
+  }
+  return null;
 }
 
-export async function sendEmail(to, subject, text, html) {
-  const t = getTransporter();
+const transporters = new Map();
+
+function getTransporter(account) {
+  if (!account) return null;
+  const key = account.owner === 'user' ? `user:${account.user}` : 'server';
+  if (!transporters.has(key)) {
+    transporters.set(key, nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user: account.user, pass: account.pass }
+    }));
+  }
+  return transporters.get(key);
+}
+
+export async function sendEmail(to, subject, text, html, account) {
+  const t = getTransporter(account || resolveGmailAccount(null));
   if (!t || !to) return false;
   try {
     await t.sendMail({
-      from: `"Hakein Job Autopilot" <${process.env.GMAIL_USER}>`,
+      from: `"Hakein Job Autopilot" <${(account || {}).user || process.env.GMAIL_USER}>`,
       to,
       subject: String(subject).slice(0, 120),
       text: String(text).slice(0, 4000),
@@ -53,8 +71,9 @@ export async function notifyUser(user, { subject, message }) {
   const prefs = user?.preferences || {};
   const emailTo = prefs.notifyEmail || user?.email;
   const topic = prefs.notifyTopic || process.env.NTFY_TOPIC;
+  const account = resolveGmailAccount(user);
   const [emailOk, pushOk] = await Promise.all([
-    sendEmail(emailTo, subject, message),
+    sendEmail(emailTo, subject, message, null, account),
     sendPush(topic, subject, message)
   ]);
   return { email: emailOk, push: pushOk };

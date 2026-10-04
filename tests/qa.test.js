@@ -344,3 +344,29 @@ describe('captcha - helpers (no network)', () => {
     assert.deepEqual(clamp, { x: 350, y: 450 });
   });
 });
+
+describe('gmail - per-user account resolution', () => {
+  it('prefers encrypted DB creds over env', async () => {
+    const { encrypt } = await import('../src/lib/crypto.js');
+    const { resolveGmailAccount } = await import('../src/services/notify.js');
+    const r = resolveGmailAccount({ gmailUser: 'u@gmail.com', gmailAppPassword: encrypt('secret123') });
+    assert.equal(r.user, 'u@gmail.com');
+    assert.equal(r.pass, 'secret123');
+    assert.equal(r.owner, 'user');
+  });
+  it('falls back to server env', async () => {
+    process.env.GMAIL_USER = 'srv@gmail.com';
+    process.env.GMAIL_APP_PASSWORD = 'srvpass';
+    const { resolveGmailAccount } = await import('../src/services/notify.js');
+    const r = resolveGmailAccount({});
+    assert.equal(r.owner, 'server');
+    delete process.env.GMAIL_USER;
+    delete process.env.GMAIL_APP_PASSWORD;
+  });
+  it('returns null when nothing configured', async () => {
+    delete process.env.GMAIL_USER;
+    delete process.env.GMAIL_APP_PASSWORD;
+    const { resolveGmailAccount } = await import('../src/services/notify.js');
+    assert.equal(resolveGmailAccount({}), null);
+  });
+});

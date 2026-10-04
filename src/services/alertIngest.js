@@ -37,8 +37,10 @@ function gmailConfig() {
 
 // Fetch unread LinkedIn/Naukri alert mails, extract job links, mark seen.
 // Safe to run every few minutes: it's your own mailbox, zero ban risk on job sites.
-export async function fetchAlertLinks({ max = 20 } = {}) {
-  const cfg = gmailConfig();
+export async function fetchAlertLinks({ max = 20, imapUser, imapPass } = {}) {
+  const cfg = (imapUser && imapPass)
+    ? { user: imapUser, pass: imapPass, owner: 'user' }
+    : gmailConfig();
   if (!cfg) return { skipped: 'gmail-not-configured', links: [] };
 
   const client = new ImapFlow({
