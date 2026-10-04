@@ -6,9 +6,15 @@
 active: gemini
 
 agents:
+  # Fully local: Ollama on this machine, no key, no quota, no downloads needed.
+  # Requires `ollama serve` running. Change `model` to any name from `ollama list`.
+  ollama-local:
+    provider: ollama
+    model: qwen2.5-coder:14b
+
   gemini:
     provider: gemini
-    model: gemini-3.5-flash
+    model: gemini-3.5-flash-lite
     apiKeyEnv: GEMINI_API_KEY
 
   gemini-flash:
@@ -52,5 +58,5 @@ agents:
 # Omit a task (or the whole block) and it follows `active`.
 tasks:
   resume: gemini
-  qa: gemini-flash
+  qa: gemini
   scoring: gemini

@@ -266,3 +266,69 @@ describe('keywords - variant matching', () => {
     assert.deepEqual(findMissingKeywords('React developer', ['React', 'GraphQL']), ['GraphQL']);
   });
 });
+
+describe('honesty - code enforcement', () => {
+  it('computes real years from profile dates', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    const yrs = svc.profileYears({ experience: [
+      { company: 'A', startDate: '06/2020', endDate: '04/2024' },
+      { company: 'B', startDate: '04/2024', endDate: 'Present' }
+    ] });
+    assert.ok(yrs >= 4 && yrs <= 7, `years=${yrs}`);
+  });
+  it('flags inflation beyond +1', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    const profile = { experience: [{ company: 'AMGO', startDate: '01/2022', endDate: 'Present' }] };
+    const bad = svc.checkHonesty('over 10 years of experience\nDev | AMGO | 01/2022 - Present', profile);
+    assert.ok(bad.violations.some((v) => v.includes('inflation')));
+    const ok = svc.checkHonesty('over 4 years of experience\nDev | AMGO | 01/2022 - Present', profile);
+    assert.equal(ok.violations.filter((v) => v.includes('inflation')).length, 0);
+  });
+  it('flags invented employers, allows real ones', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    const profile = { experience: [{ company: 'AMGO Games', startDate: '01/2022', endDate: 'Present' }] };
+    const bad = svc.checkHonesty('Dev | Tech Innovators Inc. | 01/2018 - 05/2023', profile);
+    assert.ok(bad.violations.some((v) => v.includes('unknown employer')));
+    const ok = svc.checkHonesty('Dev | AMGO Games | 01/2022 - Present', profile);
+    assert.equal(ok.violations.length, 0);
+  });
+  it('ignores contact, education, tech and date-only lines', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    const profile = { experience: [{ company: 'AMGO', startDate: '01/2022', endDate: 'Present' }] };
+    const text = [
+      'a@b.com | +91 999 | City | github.com/x',
+      'Dev | AMGO | 01/2022 - Present',
+      'Jun 2017 - Dec 2019',
+      'B.Tech | College of X | 2018 - 2021',
+      'Proj | React, AWS, Docker'
+    ].join('\n');
+    const r = svc.checkHonesty(text, profile);
+    assert.equal(r.violations.length, 0);
+  });
+});
+
+describe('honesty - labels + date formats', () => {
+  it('strips model preamble labels', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    assert.equal(svc.stripLabels('RESUME:\nSHUBHAM PATIL\ndev').split('\n')[0], 'SHUBHAM PATIL');
+    assert.equal(svc.stripLabels('Here is the corrected resume:\nABC').split('\n')[0], 'ABC');
+    assert.equal(svc.stripLabels('SHUBHAM PATIL\ndev').split('\n')[0], 'SHUBHAM PATIL');
+  });
+  it('parses ISO and dash dates', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    assert.ok(svc.profileYears({ experience: [{ company: 'A', startDate: '2020-06', endDate: '2024-04' }] }) > 3);
+    assert.ok(svc.profileYears({ experience: [{ company: 'A', startDate: 'April 2020', endDate: 'Present' }] }) > 3);
+  });
+  it('flags unknownSpan when dates are unparseable', async () => {
+    const { ResumeService } = await import('../src/services/resumeService.js');
+    const svc = new ResumeService();
+    const r = svc.checkHonesty('Dev | X | sometime - later', { experience: [{ company: 'A', startDate: '???', endDate: '' }] });
+    assert.equal(r.unknownSpan, true);
+  });
+});
