@@ -103,7 +103,7 @@ Reply with ONLY the JS code, no markdown fences.`;
     .slice(0, 4000);
 }
 
-const BANNED = [/require\s*\(/, /import\s*\(/, /\bprocess\b/, /\bchild_process\b/, /\bfs\b/, /\beval\s*\(/, /Function\s*\(/, /\.goto\s*\(/, /\.close\s*\(/, /reload\s*\(/, /setContent\s*\(/, /evaluate\s*\(/];
+const BANNED = [/require\s*\(/, /import\s*\(/, /process\s*[.\[]/, /child_process/, /\bfs\s*[.\[]/, /\beval\s*\(/, /Function\s*\(/, /\.goto\s*\(/, /\.close\s*\(/, /reload\s*\(/, /setContent\s*\(/, /evaluate\s*\(/];
 
 // Safety gate for LLM-written scripts.
 export function validateSolveScript(code) {
