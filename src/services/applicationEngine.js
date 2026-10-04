@@ -4,6 +4,7 @@
 import { resolveCredentials, detectBlockerPage } from './auth.js';
 import { resolveGmailAccount } from './notify.js';
 import { answerQuestion } from './qaService.js';
+import { applyStealth, humanType, humanClick } from './stealth.js';
 
 let chromium = null;
 async function getChromium() {
@@ -20,7 +21,13 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 async function newPage() {
   const cw = await getChromium();
   const browser = await cw.launch({ headless: HEADLESS });
-  const context = await browser.newContext({ userAgent: UA });
+  const context = await browser.newContext({
+    userAgent: UA,
+    viewport: { width: 1440, height: 900 },
+    locale: 'en-US',
+    timezoneId: 'Asia/Kolkata'
+  });
+  await applyStealth(context);
   const page = await context.newPage();
   return { browser, page };
 }
@@ -79,9 +86,10 @@ export async function loginLinkedIn(page, { email, password, gmailAccount = null
     await page.waitForTimeout(2500);
     const emailField = await visibleField('input[type="email"], input[type="text"]');
     const passField = await visibleField('input[type="password"]');
-    // Instant fill gets silently ignored as bot-like; human-paced typing proceeds.
-    await emailField.pressSequentially(email, { delay: 40 });
-    await passField.pressSequentially(password, { delay: 40 });
+    // Human-paced, varied typing (metronome timing reads as bot-like).
+    await humanType(emailField, email);
+    await page.waitForTimeout(300);
+    await humanType(passField, password);
     await page.waitForTimeout(800);
     // NOTE: clicking Sign in gets silently swallowed as bot-like; Enter submits reliably.
     // Use page-level keyboard (focus is already in the password field).
@@ -294,7 +302,7 @@ async function clickButtonByName(page, names) {
   for (const n of names) {
     const btn = page.getByRole('button', { name: n }).first();
     if (await btn.isVisible().catch(() => false)) {
-      await btn.click();
+      await humanClick(page, btn);
       await page.waitForTimeout(2000);
       return n;
     }
@@ -309,7 +317,7 @@ export async function applyLinkedInEasyApply(page, { job, resumePdfBuffer, userN
   if (!(await easyBtn.isVisible().catch(() => false))) {
     return { success: false, skipped: true, error: 'No Easy Apply button (external/company-site apply) - skipped' };
   }
-  await easyBtn.click();
+  await humanClick(page, easyBtn);
   await page.waitForTimeout(2500);
 
   await uploadResumeIfAsked(page, resumePdfBuffer, userName).catch(() => {});
@@ -345,7 +353,7 @@ export async function applyLinkedInEasyApply(page, { job, resumePdfBuffer, userN
   }
   const submit = page.getByRole('button', { name: /^submit application/i }).first();
   if (await submit.isVisible().catch(() => false)) {
-    await submit.click();
+    await humanClick(page, submit);
     await page.waitForTimeout(2500);
     return { success: true, response: { via: 'linkedin-easy-apply' }, answersUsed: allAnswered };
   }
@@ -365,9 +373,9 @@ export async function applyNaukriDirect(page, { job, answerCtx }) {
     if (!(await applyLink.isVisible().catch(() => false))) {
       return { success: false, skipped: true, error: 'No Apply button found - skipped' };
     }
-    await applyLink.click();
+    await humanClick(page, applyLink);
   } else {
-    await applyBtn.click();
+    await humanClick(page, applyBtn);
   }
   await page.waitForTimeout(3000);
   const answered = [];
