@@ -141,7 +141,7 @@ export async function clickAt(page, x1000, y1000) {
 export async function typeAt(page, x1000, y1000, text) {
   await clickAt(page, x1000, y1000);
   await page.waitForTimeout(300);
-  await page.keyboard.pressSequentially(String(text || ''), { delay: 60 });
+  await page.keyboard.type(String(text || ''), { delay: 60 });
 }
 
 // Run LLM-written code with a hard timeout. Resolves true if no throw.

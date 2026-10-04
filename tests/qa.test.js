@@ -408,7 +408,7 @@ describe('captcha - script runner (no network)', () => {
       },
       keyboard: { pressSequentially: async (t) => { calls.push(['type', t]); }, press: async (k) => { calls.push(['press', k]); } },
       viewportSize: () => ({ width: 1000, height: 800 }),
-      waitForTimeout: async (ms) => { calls.push(['wait', ms]); }
+      waitForTimeout: (ms) => { calls.push(['wait', ms]); return new Promise((r) => setTimeout(r, Math.min(ms, 5))); }
     };
   }
   it('executes clickAt/typeAt scripts against a stub page', async () => {
@@ -422,7 +422,7 @@ describe('captcha - script runner (no network)', () => {
   it('times out runaway scripts', async () => {
     const { runSolveScript } = await import('../src/services/captchaSolver.js');
     const page = await stubPage();
-    const r = await runSolveScript(page, 'while (true) { await clickAt(1, 1); }', 300);
+    const r = await runSolveScript(page, 'await sleep(5000); await clickAt(1, 1);', 300);
     assert.equal(r.ran, false);
     assert.ok(/timeout/.test(r.error));
   });
