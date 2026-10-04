@@ -222,7 +222,8 @@ export async function agenticSolve(page, { rounds = 2, debugDir = null, gmailAcc
       notes.push(`round${i + 1}:rejected(${problem})`);
       continue;
     }
-    const run = await runSolveScript(page, code);
+    // Scripts may legitimately wait (getEmailCode polls the inbox ~50s) — give them room.
+    const run = await runSolveScript(page, code, 150000);
     notes.push(`round${i + 1}:${run.ran ? 'ran' : 'error:' + run.error}`);
     await snap(`round${i + 1}-result`, { text: notes[notes.length - 1] });
     try {
