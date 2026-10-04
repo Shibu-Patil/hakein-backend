@@ -89,10 +89,15 @@ export async function generateSolveScript(screenshotB64, pageSummary, mime = 'im
 PAGE CONTEXT:
 ${String(pageSummary || '').slice(0, 1500)}
 
+COORDINATES (use when labels are unclear — screenshots are 0-1000 space, top-left origin):
+- clickAt(x, y) clicks normalized coords, e.g. clickAt(310, 455).
+- typeAt(x, y, "text") clicks there first, then types.
+- Estimate positions straight off the screenshot image you see.
+
 RULES:
-- Use ONLY: page.locator(), page.getByRole(), page.mouse, page.keyboard, sleep(ms).
+- Use ONLY: clickAt, typeAt, page.locator(), page.getByRole(), page.mouse, page.keyboard, sleep(ms).
+- Prefer locators for labeled buttons/inputs; prefer clickAt/typeAt for CAPTCHA images, grids, sliders, checkboxes without labels.
 - NO require/import/process/fs/eval/navigation/reload/goto/close.
-- Prefer: click checkboxes, fill visible code/text inputs, click Verify/Submit, drag sliders.
 - Keep it under 25 lines. No explanations.
 Reply with ONLY the JS code, no markdown fences.`;
   const text = await visionAsk(ai, question, screenshotB64, mime);
@@ -111,7 +116,9 @@ export function validateSolveScript(code) {
   for (const re of BANNED) {
     if (re.test(code)) return `banned pattern: ${re}`;
   }
-  if (!code.includes('page.')) return 'script never touches page';
+  if (!code.includes('page.') && !code.includes('clickAt(') && !code.includes('typeAt(')) {
+    return 'script never touches page';
+  }
   return null;
 }
 
@@ -119,14 +126,39 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
 
+// Click by NORMALIZED coords (0-1000 space, like UI-TARS/ShowUI agents).
+// The LLM reads positions off the screenshot; we scale to the real viewport.
+export async function clickAt(page, x1000, y1000) {
+  const vp = page.viewportSize() || { width: 1280, height: 800 };
+  const x = Math.min(1000, Math.max(0, Number(x1000))) / 1000 * vp.width;
+  const y = Math.min(1000, Math.max(0, Number(y1000))) / 1000 * vp.height;
+  await page.mouse.move(x, y, { steps: 5 });
+  await page.waitForTimeout(250);
+  await page.mouse.click(x, y);
+}
+
+// Type at NORMALIZED coords: click there first, then type.
+export async function typeAt(page, x1000, y1000, text) {
+  await clickAt(page, x1000, y1000);
+  await page.waitForTimeout(300);
+  await page.keyboard.pressSequentially(String(text || ''), { delay: 60 });
+}
+
 // Run LLM-written code with a hard timeout. Resolves true if no throw.
 export async function runSolveScript(page, code, timeoutMs = 45000) {
   const problem = validateSolveScript(code);
   if (problem) return { ran: false, error: problem };
-  const fn = new AsyncFunction('page', 'sleep', code);
+  const fn = new AsyncFunction(
+    'page', 'sleep', 'clickAt', 'typeAt', 'helpers',
+    '"use strict";\n' + code
+  );
+  const helpers = {
+    clickAt: (x, y) => clickAt(page, x, y),
+    typeAt: (x, y, t) => typeAt(page, x, y, t)
+  };
   try {
     await Promise.race([
-      fn(page, sleep),
+      fn(page, sleep, helpers.clickAt, helpers.typeAt, helpers),
       new Promise((_, reject) => setTimeout(() => reject(new Error('script timeout')), timeoutMs))
     ]);
     return { ran: true };

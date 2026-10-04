@@ -386,3 +386,11 @@ describe('captcha - agentic script gate (no network)', () => {
     assert.equal(validateSolveScript('await page.locator("input").first().fill("abc123");\nawait page.keyboard.press("Enter");'), null);
   });
 });
+
+describe('captcha - coordinate tools (no network)', () => {
+  it('accepts clickAt/typeAt scripts', async () => {
+    const { validateSolveScript } = await import('../src/services/captchaSolver.js');
+    assert.equal(validateSolveScript('await clickAt(310, 455);\nawait sleep(1000);'), null);
+    assert.equal(validateSolveScript('await typeAt(200, 300, "483920");'), null);
+  });
+});
