@@ -93,6 +93,9 @@ COORDINATES (use when labels are unclear — screenshots are 0-1000 space, top-l
 - clickAt(x, y) clicks normalized coords, e.g. clickAt(310, 455).
 - typeAt(x, y, "text") clicks there first, then types.
 - Estimate positions straight off the screenshot image you see.
+EMAILED CODES: if the screen asks for a code sent to the user's email, call
+const code = await getEmailCode(); then typeAt(...) it into the code box and submit.
+Never invent a code, never ask a human — getEmailCode() reads the real inbox.
 
 RULES:
 - Use ONLY: clickAt, typeAt, page.locator(), page.getByRole(), page.mouse, page.keyboard, sleep(ms).
@@ -150,16 +153,18 @@ export async function runSolveScript(page, code, timeoutMs = 45000) {
   const problem = validateSolveScript(code);
   if (problem) return { ran: false, error: problem };
   const fn = new AsyncFunction(
-    'page', 'sleep', 'clickAt', 'typeAt', 'helpers',
+    'page', 'sleep', 'clickAt', 'typeAt', 'getEmailCode', 'helpers',
     '"use strict";\n' + code
   );
   const helpers = {
     clickAt: (x, y) => clickAt(page, x, y),
-    typeAt: (x, y, t) => typeAt(page, x, y, t)
+    typeAt: (x, y, t) => typeAt(page, x, y, t),
+    // Emailed verification codes (LinkedIn sends one to the user's Gmail).
+    getEmailCode: () => fetchLatestCode(scriptGmailAccount)
   };
   try {
     await Promise.race([
-      fn(page, sleep, helpers.clickAt, helpers.typeAt, helpers),
+      fn(page, sleep, helpers.clickAt, helpers.typeAt, helpers.getEmailCode, helpers),
       new Promise((_, reject) => setTimeout(() => reject(new Error('script timeout')), timeoutMs))
     ]);
     return { ran: true };
@@ -168,8 +173,12 @@ export async function runSolveScript(page, code, timeoutMs = 45000) {
   }
 }
 
+// Gmail account visible to LLM-written scripts via getEmailCode(). Set per attempt.
+let scriptGmailAccount = null;
+
 // Full agentic attempt: screenshot -> LLM writes script -> run -> caller re-checks.
-export async function agenticSolve(page, { rounds = 2, debugDir = null } = {}) {
+export async function agenticSolve(page, { rounds = 2, debugDir = null, gmailAccount = null } = {}) {
+  scriptGmailAccount = gmailAccount;
   const notes = [];
   // Evidence on by default (timestamped tmp dir); opt out with CAPTCHA_DEBUG=0.
   // Each attempt keeps: screenshot seen, script written, result, screenshot after.
@@ -296,32 +305,43 @@ export function cellCenter(cell, box, rows, cols) {
   };
 }
 
+// Read the newest LinkedIn verification code from Gmail (waits for arrival).
+// Returns 6-digit code string or null. Shared by direct fill + agentic scripts.
+export async function fetchLatestCode(account, { waits = [0, 20000, 30000] } = {}) {
+  const { resolveGmailAccount } = await import('./notify.js');
+  const acct = account || resolveGmailAccount(null);
+  if (!acct?.user || !acct?.pass) return null;
+  const { ImapFlow } = await import('imapflow');
+  for (const wait of waits) {
+    if (wait) await new Promise((r) => setTimeout(r, wait));
+    const client = new ImapFlow({ host: 'imap.gmail.com', port: 993, secure: true, auth: { user: acct.user, pass: acct.pass }, logger: false });
+    try {
+      await client.connect();
+      await client.mailboxOpen('INBOX');
+      const uids = await client.search({ from: 'linkedin.com', since: new Date(Date.now() - 30 * 60 * 1000) });
+      const take = (uids || []).slice(-5).reverse();
+      for (const uid of take) {
+        const msg = await client.fetchOne(String(uid), { bodyParts: ['TEXT'] }).catch(() => null);
+        const text = msg?.bodyParts?.get('TEXT')?.toString('utf8') || '';
+        const m = text.match(/\b(\d{6})\b/);
+        if (m && /verif|code|confirm/i.test(text)) return m[1];
+      }
+    } catch { /* retry next wait */ }
+    finally { await client.logout().catch(() => {}); }
+  }
+  return null;
+}
+
 // Email verification codes (LinkedIn "enter the code we emailed you").
 // Reads the code from the user's own Gmail via IMAP and fills it. No human needed.
 // account: { user, pass } — pass explicitly (per-user DB creds) or falls back to server env.
 export async function solveEmailCode(page, account) {
   const { resolveGmailAccount } = await import('./notify.js');
-  const acct = account || resolveGmailAccount(null);
-  if (!acct?.user || !acct?.pass) {
+  if (!account && !resolveGmailAccount(null)) {
     return { solved: false, details: 'email-code challenge needs Gmail: save app password in Setup, or set GMAIL_USER + GMAIL_APP_PASSWORD in backend .env' };
   }
-  const user = acct.user;
-  const pass = acct.pass;
-  const { ImapFlow } = await import('imapflow');
-  const client = new ImapFlow({ host: 'imap.gmail.com', port: 993, secure: true, auth: { user, pass }, logger: false });
-  await client.connect();
+  const code = await fetchLatestCode(account);
   try {
-    await client.mailboxOpen('INBOX');
-    // Newest LinkedIn mail first (code mails arrive within seconds).
-    const uids = await client.search({ from: 'linkedin.com', since: new Date(Date.now() - 30 * 60 * 1000) });
-    const take = (uids || []).slice(-3).reverse();
-    let code = null;
-    for (const uid of take) {
-      const msg = await client.fetchOne(String(uid), { bodyParts: ['TEXT'] }).catch(() => null);
-      const text = msg?.bodyParts?.get('TEXT')?.toString('utf8') || '';
-      const m = text.match(/\b(\d{6})\b/);
-      if (m && /verif|code|confirm/i.test(text)) { code = m[1]; break; }
-    }
     if (!code) return { solved: false, details: 'no LinkedIn code email arrived yet (wait ~30s, retry)' };
     const input = page.locator('input:not([type="hidden"])').first();
     const box = page.locator('input[type="text"], input:not([type]), input[type="tel"], input[type="number"]').filter({ visible: true }).first();
@@ -335,8 +355,8 @@ export async function solveEmailCode(page, account) {
     const url = page.url();
     if (!/challenge|checkpoint|verification/i.test(url)) return { solved: true, details: 'email code accepted' };
     return { solved: false, details: 'code submitted but still on challenge (wrong/expired code?)' };
-  } finally {
-    await client.logout().catch(() => {});
+  } catch (e) {
+    return { solved: false, details: `email-code fill failed: ${String(e.message).slice(0, 150)}` };
   }
 }
 
@@ -383,14 +403,14 @@ export async function solveChallenge(page, { maxRounds = 3, gmailAccount = null 
           await page.waitForTimeout(3000);
           continue; // re-check: checkbox often leads to image challenge next
         }
-        return agenticSolve(page, { rounds: 2 });
+        return agenticSolve(page, { rounds: 2, gmailAccount });
       }
       if (kind.type === 'text') {
         if (await solveTextCaptcha(page, shot)) {
           await page.waitForTimeout(2500);
           continue;
         }
-        return agenticSolve(page, { rounds: 2 });
+        return agenticSolve(page, { rounds: 2, gmailAccount });
       }
       if (kind.type === 'image-select') {
         const done = await solveImageGrid(page, shot, kind);
@@ -398,7 +418,7 @@ export async function solveChallenge(page, { maxRounds = 3, gmailAccount = null 
           await page.waitForTimeout(2500);
           continue;
         }
-        return agenticSolve(page, { rounds: 2 });
+        return agenticSolve(page, { rounds: 2, gmailAccount });
       }
       if (kind.type === 'slider') {
         if (await trySlider(page)) {
@@ -406,10 +426,10 @@ export async function solveChallenge(page, { maxRounds = 3, gmailAccount = null 
           continue;
         }
         // Built-in drag failed — let the LLM write a custom script for this slider.
-        return agenticSolve(page, { rounds: 2 });
+        return agenticSolve(page, { rounds: 2, gmailAccount });
       }
       // Unknown/custom challenge — LLM writes a bespoke Playwright script for it.
-      return agenticSolve(page, { rounds: 2 });
+      return agenticSolve(page, { rounds: 2, gmailAccount });
     } catch (e) {
       return { solved: false, details: `solve error: ${String(e.message).slice(0, 150)}` };
     }
