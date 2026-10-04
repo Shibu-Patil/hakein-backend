@@ -30,7 +30,8 @@ console.log('USER:', user.email, new Date().toISOString());
 const login = await verifyCredentials('linkedin', {
   email: user.linkedinEmail,
   password: decrypt(user.linkedinPassword),
-  gmailAccount: resolveGmailAccount(user)
+  gmailAccount: resolveGmailAccount(user),
+  user
 });
 console.log('LOGIN:', JSON.stringify(login));
 if (!login.ok) throw new Error('Login failed, aborting apply test');

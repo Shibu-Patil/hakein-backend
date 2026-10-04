@@ -27,10 +27,42 @@ async function newPage() {
 
 // ---------- login flows ----------
 
+// Saved-session fast path: load DB cookies, check feed. No password hit.
+// Returns { ok:true, via:'cookies' } | { ok:false, needed:true } (login needed)
+// | { ok:false, error } (don't proceed).
+export async function tryCookieSession(page, user) {
+  let cookies = [];
+  try {
+    const raw = user?.linkedinToken;
+    if (!raw) {
+      if (process.env.LINKEDIN_LI_AT) {
+        cookies = [{ name: 'li_at', value: process.env.LINKEDIN_LI_AT, domain: '.linkedin.com', path: '/' }];
+      } else {
+        return { ok: false, needed: true };
+      }
+    } else {
+      cookies = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    }
+  } catch {
+    return { ok: false, needed: true };
+  }
+  if (!cookies.length) return { ok: false, needed: true };
+  try {
+    await page.context().addCookies(cookies);
+    await page.goto('https://www.linkedin.com/feed/', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(3000);
+    const url = page.url();
+    if (url.includes('/feed') && !url.includes('authwall') && !url.includes('/login')) {
+      return { ok: true, via: 'cookies' };
+    }
+    return { ok: false, needed: true }; // session expired -> normal login once
+  } catch (e) {
+    return { ok: false, error: `session check failed: ${String(e.message).slice(0, 120)}` };
+  }
+}
+
 export async function loginLinkedIn(page, { email, password, gmailAccount = null, userId = null }) {
   const loginUserId = userId;
-  await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.waitForTimeout(2500);
   // LinkedIn randomizes field ids AND renders hidden duplicate forms — locate by type, visible only.
   async function visibleField(selector) {
     const all = page.locator(selector);
@@ -41,19 +73,29 @@ export async function loginLinkedIn(page, { email, password, gmailAccount = null
     }
     throw new Error(`No visible field: ${selector}`);
   }
-  const emailField = await visibleField('input[type="email"], input[type="text"]');
-  const passField = await visibleField('input[type="password"]');
-  // Instant fill gets silently ignored as bot-like; human-paced typing proceeds.
-  await emailField.pressSequentially(email, { delay: 40 });
-  await passField.pressSequentially(password, { delay: 40 });
-  await page.waitForTimeout(800);
-  // Submit button has no type=submit anymore — click by name, else Enter.
-  // NOTE: clicking Sign in gets silently swallowed as bot-like; Enter submits reliably.
-  await passField.press('Enter');
-  // Challenge redirect can take 5-15s — poll for URL change instead of one fixed wait.
-  for (let i = 0; i < 10; i++) {
-    await page.waitForTimeout(2000);
-    if (!page.url().endsWith('/login') && !page.url().endsWith('/login/')) break;
+  // Submit is flaky under bot suspicion (silently ignored) — reload + retry up to 3x.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(2500);
+    const emailField = await visibleField('input[type="email"], input[type="text"]');
+    const passField = await visibleField('input[type="password"]');
+    // Instant fill gets silently ignored as bot-like; human-paced typing proceeds.
+    await emailField.pressSequentially(email, { delay: 40 });
+    await passField.pressSequentially(password, { delay: 40 });
+    await page.waitForTimeout(800);
+    // NOTE: clicking Sign in gets silently swallowed as bot-like; Enter submits reliably.
+    // Use page-level keyboard (focus is already in the password field).
+    await page.keyboard.press('Enter');
+    // Redirects bounce through intermediate URLs (/login?trk=...). Only settle on
+    // feed (success) or challenge (solver path); never bail on the first change.
+    let left = false;
+    for (let i = 0; i < 12; i++) {
+      await page.waitForTimeout(2000);
+      const u = page.url();
+      if (u.includes('/feed') || /challenge|checkpoint/i.test(u)) { left = true; break; }
+      if (!/\/login(\?|\/|$)/.test(u)) { left = true; break; }
+    }
+    if (left) break;
   }
   const html = await page.content().catch(() => '');
   const blocker = detectBlockerPage(page.url(), html);
@@ -416,21 +458,18 @@ export async function applyToJob({ job, resumePdfBuffer, resumeText, user, crede
     };
     const gmailAccount = resolveGmailAccount(user);
     if (job.source === 'linkedin') {
-      const creds = credentials.linkedin || resolveCredentials(user, 'linkedin');
-      if (!creds) return { success: false, error: 'LinkedIn credentials missing. Save LinkedIn email+password for the user or set LINKEDIN_EMAIL/LINKEDIN_PASSWORD.' };
-      creds.gmailAccount = creds.gmailAccount || gmailAccount;
-      // Optional session-cookie fast path
-      if (process.env.LINKEDIN_LI_AT && !creds.forcePassword) {
-        await page.context().addCookies([{ name: 'li_at', value: process.env.LINKEDIN_LI_AT, domain: '.linkedin.com', path: '/' }]);
-        await page.goto(job.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        const easyVisible = await page.getByRole('button', { name: /easy apply/i }).first().isVisible().catch(() => false);
-        if (!easyVisible && page.url().includes('authwall')) {
-          const login = await loginLinkedIn(page, creds);
-          if (!login.ok) return { success: false, error: login.error };
-        }
-      } else {
+      // 1st choice: saved session cookies (no password hit at all).
+      const session = await tryCookieSession(page, user);
+      if (!session.ok && session.needed) {
+        // 2nd choice: one normal password login (saves fresh cookies on success).
+        const creds = credentials.linkedin || resolveCredentials(user, 'linkedin');
+        if (!creds) return { success: false, error: 'LinkedIn credentials missing. Save LinkedIn email+password for the user or set LINKEDIN_EMAIL/LINKEDIN_PASSWORD.' };
+        creds.gmailAccount = creds.gmailAccount || gmailAccount;
+        creds.userId = creds.userId || user?.id || null;
         const login = await loginLinkedIn(page, creds);
         if (!login.ok) return { success: false, error: login.error };
+      } else if (!session.ok) {
+        return { success: false, error: session.error };
       }
       return await applyLinkedInEasyApply(page, { job, resumePdfBuffer, userName: user?.profile?.name || user?.name, answerCtx: ctx });
     }
@@ -451,10 +490,22 @@ export async function applyToJob({ job, resumePdfBuffer, resumeText, user, crede
 }
 
 // Quick credential check without applying (used by tests + API)
-export async function verifyCredentials(platform, { email, password, gmailAccount = null }) {
+export async function verifyCredentials(platform, { email, password, gmailAccount = null, user = null }) {
   const { browser, page } = await newPage();
   try {
-    if (platform === 'linkedin') return await loginLinkedIn(page, { email, password, gmailAccount });
+    if (platform === 'linkedin') {
+      // Prefer saved session: proves "stay logged in" without touching the password.
+      if (user) {
+        const session = await tryCookieSession(page, user);
+        if (session.ok) {
+          await browser.close().catch(() => {});
+          return { ok: true, via: 'cookies' };
+        }
+      }
+      const r = await loginLinkedIn(page, { email, password, gmailAccount, userId: user?.id || user?._id || null });
+      await browser.close().catch(() => {});
+      return r;
+    }
     if (platform === 'naukri') return await loginNaukri(page, { email, password, gmailAccount });
     return { ok: false, error: `Unknown platform: ${platform}` };
   } finally {

@@ -285,10 +285,17 @@ export async function solveEmailCode(page, account) {
 // Main entry: look at the page, solve what can be solved. Returns { solved, details }.
 // Pass gmailAccount ({ user, pass }) so multi-user setups read the RIGHT mailbox.
 export async function solveChallenge(page, { maxRounds = 3, gmailAccount = null } = {}) {
-  // Cheap text check first: email-code challenges don't need vision.
+  // Cheap checks first: email-code challenges don't need vision.
+  // Detect by wording OR by structure (challenge URL + lone text input + submit).
   try {
+    const onChallenge = /challenge|checkpoint/i.test(page.url());
     const bodyText = (await page.locator('body').innerText({ timeout: 8000 }).catch(() => '')).toLowerCase();
-    if (/verification code/.test(bodyText) && /email/.test(bodyText)) {
+    const mentionsCode = /verif|enter.*code|code.*email|one-time|otp/i.test(bodyText);
+    let hasCodeField = false;
+    if (onChallenge) {
+      hasCodeField = (await page.locator('input[type="text"], input[type="tel"], input[type="number"], input:not([type])').filter({ visible: true }).count().catch(() => 0)) > 0;
+    }
+    if ((mentionsCode && /email|code|otp/i.test(bodyText)) || (onChallenge && hasCodeField)) {
       const r = await solveEmailCode(page, gmailAccount);
       if (r.solved) return r;
       // fall through to vision rounds for other challenge types
