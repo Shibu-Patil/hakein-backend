@@ -14,7 +14,7 @@ agents:
 
   gemini:
     provider: gemini
-    model: gemini-3.5-flash-lite
+    model: gemini-3.6-flash
     apiKeyEnv: GEMINI_API_KEY
 
   gemini-flash:
@@ -56,6 +56,9 @@ agents:
 
 # Per-job overrides. Each value must be a name from `agents`.
 # Omit a task (or the whole block) and it follows `active`.
+# `vision` (optional): agent used to SEE and solve captchas (screenshot -> LLM).
+# Must be vision-capable (gemini/openai/openrouter/anthropic — NOT text-only ollama).
+# Or set VISION_AGENT env var instead. Without it, captcha solving uses the qa agent.
 tasks:
   resume: gemini
   qa: gemini

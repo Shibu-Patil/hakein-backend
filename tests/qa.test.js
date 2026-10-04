@@ -332,3 +332,15 @@ describe('honesty - labels + date formats', () => {
     assert.equal(r.unknownSpan, true);
   });
 });
+
+describe('captcha - helpers (no network)', () => {
+  it('maps grid cells to box coords', async () => {
+    const { cellCenter } = await import('../src/services/captchaSolver.js');
+    const box = { x: 100, y: 200, width: 300, height: 300 };
+    assert.deepEqual(cellCenter('R1C1', box, 3, 3), { x: 150, y: 250 });
+    assert.deepEqual(cellCenter('R3C3', box, 3, 3), { x: 350, y: 450 });
+    assert.equal(cellCenter('bogus', box, 3, 3), null);
+    const clamp = cellCenter('R9C9', box, 3, 3);
+    assert.deepEqual(clamp, { x: 350, y: 450 });
+  });
+});

@@ -53,7 +53,9 @@ async function scrapeLinkedIn({ keywords, locations, hoursBack, maxJobs }) {
   const jobs = [];
   const kw = encodeURIComponent((keywords || ['software engineer']).join(' '));
   const loc = encodeURIComponent((locations && locations[0]) || 'India');
-  const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${kw}&location=${loc}&f_TPR=r${Math.min(Math.max(hoursBack, 1), 24 * 7)}&start=0`;
+  // f_TPR is in SECONDS (r86400 = past 24h). Passing hours (r24) means "past 24 seconds" = empty.
+  const seconds = Math.min(Math.max(hoursBack, 1), 24 * 7) * 3600;
+  const url = `https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search?keywords=${kw}&location=${loc}&f_TPR=r${seconds}&start=0`;
 
   const { data: html } = await axios.get(url, { headers: { 'User-Agent': pickUA() }, timeout: 15000 });
   const $ = cheerio.load(html);

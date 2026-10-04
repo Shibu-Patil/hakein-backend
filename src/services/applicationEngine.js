@@ -28,15 +28,54 @@ async function newPage() {
 
 export async function loginLinkedIn(page, { email, password }) {
   await page.goto('https://www.linkedin.com/login', { waitUntil: 'domcontentloaded', timeout: 30000 });
-  await page.fill('#username', email);
-  await page.fill('#password', password);
-  await page.click('button[type="submit"]');
+  await page.waitForTimeout(2500);
+  // LinkedIn randomizes field ids AND renders hidden duplicate forms — locate by type, visible only.
+  async function visibleField(selector) {
+    const all = page.locator(selector);
+    const n = await all.count();
+    for (let i = 0; i < n; i++) {
+      const f = all.nth(i);
+      if (await f.isVisible().catch(() => false)) return f;
+    }
+    throw new Error(`No visible field: ${selector}`);
+  }
+  const emailField = await visibleField('input[type="email"], input[type="text"]');
+  const passField = await visibleField('input[type="password"]');
+  // Instant fill gets silently ignored as bot-like; human-paced typing proceeds.
+  await emailField.pressSequentially(email, { delay: 40 });
+  await passField.pressSequentially(password, { delay: 40 });
+  await page.waitForTimeout(800);
+  // Submit button has no type=submit anymore — click by name, else Enter.
+  const signIn = page.getByRole('button', { name: /sign in/i }).first();
+  if (await signIn.isVisible().catch(() => false)) {
+    await signIn.click();
+  } else {
+    await passField.press('Enter');
+  }
   await page.waitForTimeout(4000);
   const html = await page.content().catch(() => '');
   const blocker = detectBlockerPage(page.url(), html);
-  if (blocker) return { ok: false, error: `LinkedIn ${blocker}. Complete it once in a headed browser, then retry.` };
+  if (blocker) {
+    // Try vision-solving the challenge (screenshot -> LLM -> click/type), then re-check.
+    try {
+      const { solveChallenge } = await import('./captchaSolver.js');
+      const solved = await solveChallenge(page, { maxRounds: 3 });
+      const html2 = await page.content().catch(() => '');
+      if (solved.solved && !detectBlockerPage(page.url(), html2)) {
+        return await finishLinkedInLogin(page);
+      }
+      return { ok: false, error: `LinkedIn challenge unsolved (${solved.details}). Complete it once in a headed browser, then retry.` };
+    } catch (e) {
+      return { ok: false, error: `LinkedIn ${blocker} (solver unavailable: ${String(e.message).slice(0, 120)}).` };
+    }
+  }
+  return finishLinkedInLogin(page, html);
+}
+
+async function finishLinkedInLogin(page, html) {
+  const body = html ?? (await page.content().catch(() => ''));
   const loggedIn = page.url().includes('/feed') || page.url().includes('/in/');
-  if (!loggedIn && html.toLowerCase().includes('couldn\'t find a linkedin account')) {
+  if (!loggedIn && body.toLowerCase().includes('couldn\'t find a linkedin account')) {
     return { ok: false, error: 'LinkedIn: wrong email/password' };
   }
   if (!loggedIn) return { ok: false, error: `LinkedIn login uncertain (${page.url()}). Check credentials/2FA.` };
@@ -57,7 +96,17 @@ export async function loginNaukri(page, { email, password }) {
   await page.getByRole('button', { name: /login/i }).first().click();
   await page.waitForTimeout(4000);
   const html = await page.content().catch(() => '');
-  if (html.toLowerCase().includes('captcha')) return { ok: false, error: 'Naukri captcha. Retry later or login manually once.' };
+  if (html.toLowerCase().includes('captcha')) {
+    try {
+      const { solveChallenge } = await import('./captchaSolver.js');
+      const solved = await solveChallenge(page, { maxRounds: 3 });
+      const html2 = await page.content().catch(() => '');
+      if (solved.solved && !html2.toLowerCase().includes('captcha')) return { ok: true };
+      return { ok: false, error: `Naukri captcha unsolved (${solved.details}). Retry later or login manually once.` };
+    } catch (e) {
+      return { ok: false, error: `Naukri captcha (solver unavailable: ${String(e.message).slice(0, 120)}).` };
+    }
+  }
   if (html.toLowerCase().includes('invalid')) return { ok: false, error: 'Naukri: wrong email/password' };
   return { ok: true };
 }
