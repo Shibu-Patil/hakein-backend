@@ -98,6 +98,7 @@ RULES:
 - Use ONLY: clickAt, typeAt, page.locator(), page.getByRole(), page.mouse, page.keyboard, sleep(ms).
 - Prefer locators for labeled buttons/inputs; prefer clickAt/typeAt for CAPTCHA images, grids, sliders, checkboxes without labels.
 - NO require/import/process/fs/eval/navigation/reload/goto/close.
+- NEVER ask a human anything: NO prompt(), alert(), confirm(). Read everything you need off the screenshot.
 - Keep it under 25 lines. No explanations.
 Reply with ONLY the JS code, no markdown fences.`;
   const text = await visionAsk(ai, question, screenshotB64, mime);
@@ -108,7 +109,7 @@ Reply with ONLY the JS code, no markdown fences.`;
     .slice(0, 4000);
 }
 
-const BANNED = [/require\s*\(/, /import\s*\(/, /process\s*\.\s*(env|argv|exit|cwd|pid|platform|version|mainModule|execPath)\b/, /process\s*\[/, /child_process/, /\bfs\s*\.\s*(read|write|open|unlink|rm|mkdir|readdir|create)/, /\beval\s*\(/, /Function\s*\(/, /\.goto\s*\(/, /\.close\s*\(/, /reload\s*\(/, /setContent\s*\(/, /evaluate\s*\(/];
+const BANNED = [/require\s*\(/, /import\s*\(/, /process\s*\.\s*(env|argv|exit|cwd|pid|platform|version|mainModule|execPath)\b/, /process\s*\[/, /child_process/, /\bfs\s*\.\s*(read|write|open|unlink|rm|mkdir|readdir|create)/, /\beval\s*\(/, /Function\s*\(/, /\.goto\s*\(/, /\.close\s*\(/, /reload\s*\(/, /setContent\s*\(/, /evaluate\s*\(/, /(^|[^A-Za-z0-9_$])prompt\s*\(/, /(^|[^A-Za-z0-9_$])alert\s*\(/, /(^|[^A-Za-z0-9_$])confirm\s*\(/];
 
 // Safety gate for LLM-written scripts.
 export function validateSolveScript(code) {
