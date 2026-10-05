@@ -322,10 +322,15 @@ export async function fetchLatestCode(account, { waits = [0, 20000, 30000] } = {
       const uids = await client.search({ from: 'linkedin.com', since: new Date(Date.now() - 30 * 60 * 1000) });
       const take = (uids || []).slice(-5).reverse();
       for (const uid of take) {
-        const msg = await client.fetchOne(String(uid), { bodyParts: ['TEXT'] }).catch(() => null);
+        const msg = await client.fetchOne(String(uid), { envelope: true, bodyParts: ['TEXT'] }).catch(() => null);
+        const subject = msg?.envelope?.subject || '';
         const text = msg?.bodyParts?.get('TEXT')?.toString('utf8') || '';
+        // LinkedIn puts the code in the SUBJECT ("Here's your verification code 756105"),
+        // body TEXT is often empty — check subject first, then body.
+        const subjMatch = String(subject).match(/\b(\d{4,8})\b/);
+        if (subjMatch && /verif|code|confirm/i.test(subject)) return subjMatch[1];
         const m = text.match(/\b(\d{6})\b/);
-        if (m && /verif|code|confirm/i.test(text)) return m[1];
+        if (m && /verif|code|confirm/i.test(text + ' ' + subject)) return m[1];
       }
     } catch { /* retry next wait */ }
     finally { await client.logout().catch(() => {}); }

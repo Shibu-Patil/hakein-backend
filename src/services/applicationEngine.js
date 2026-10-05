@@ -182,14 +182,49 @@ export async function loginNaukri(page, { email, password, gmailAccount = null }
 // ---------- apply flows ----------
 
 async function uploadResumeIfAsked(page, resumePdfBuffer, name) {
-  const fileInput = page.locator('input[type="file"]').first();
-  if (!(await fileInput.isVisible().catch(() => false))) return false;
-  const tmp = (await import('node:os')).tmpdir();
-  const path = (await import('node:path')).join(tmp, `${Date.now()}-${(name || 'resume').replace(/[^a-z0-9]+/gi, '_')}.pdf`);
-  await (await import('node:fs/promises')).writeFile(path, resumePdfBuffer);
-  await fileInput.setInputFiles(path);
-  await page.waitForTimeout(1500);
-  return true;
+  // Resume step (2/4): LinkedIn has NO file input until "Upload resume" is clicked —
+  // it opens a native file chooser. Catch the chooser event and feed it our PDF.
+  // Also covers the case where a hidden input already exists (setInputFiles works hidden).
+  const scopes = [];
+  try {
+    const m = modalScope(page);
+    if (await m.isVisible().catch(() => false)) scopes.push(m);
+  } catch { /* ignore */ }
+  scopes.push(page);
+  async function tmpPdf() {
+    const tmp = (await import('node:os')).tmpdir();
+    const path = (await import('node:path')).join(tmp, `${Date.now()}-${(name || 'resume').replace(/[^a-z0-9]+/gi, '_')}.pdf`);
+    await (await import('node:fs/promises')).writeFile(path, resumePdfBuffer);
+    return path;
+  }
+  for (const scope of scopes) {
+    const inputs = scope.locator('input[type="file"]');
+    const n = await inputs.count().catch(() => 0);
+    for (let i = 0; i < n; i++) {
+      try {
+        await inputs.nth(i).setInputFiles(await tmpPdf());
+        await page.waitForTimeout(2500);
+        return true;
+      } catch { /* try next input */ }
+    }
+    // No input yet — click "Upload resume" and feed the file chooser.
+    try {
+      const uploadBtn = scope.getByRole('button', { name: /upload resume/i }).first();
+      if (await uploadBtn.isVisible().catch(() => false)) {
+        const path = await tmpPdf();
+        const [chooser] = await Promise.all([
+          page.waitForEvent('filechooser', { timeout: 8000 }).catch(() => null),
+          uploadBtn.click()
+        ]);
+        if (chooser) {
+          await chooser.setFiles(path);
+          await page.waitForTimeout(3000);
+          return true;
+        }
+      }
+    } catch { /* fall through */ }
+  }
+  return false;
 }
 
 // Find the label text for a field via its nearest form container.
@@ -210,7 +245,8 @@ async function fieldLabel(field) {
 }
 
 function modalScope(page) {
-  const modal = page.locator('.jobs-easy-apply-modal, [role="dialog"]').first();
+  // LinkedIn 2025-26 markup uses native <dialog data-testid="dialog" open>, not role="dialog".
+  const modal = page.locator('.jobs-easy-apply-modal, [role="dialog"], dialog[data-testid="dialog"], dialog[open], div[data-testid="dialog-content"]').first();
   return modal;
 }
 
@@ -233,16 +269,20 @@ export async function answerLinkedInModal(page, answerCtx) {
     }
   }
 
-  // text inputs
-  const texts = modal.locator('input[type="text"], input:not([type])');
+  // text + phone + email inputs (LinkedIn contact step uses type=tel)
+  const texts = modal.locator('input[type="text"], input[type="tel"], input[type="email"], input[type="number"], input:not([type])');
   const tn = await texts.count().catch(() => 0);
   for (let i = 0; i < tn; i++) {
     const f = texts.nth(i);
     if (!(await f.isVisible().catch(() => false))) continue;
     if (await f.isDisabled().catch(() => false)) continue;
     if (String(await f.inputValue().catch(() => '')).trim()) continue; // pre-filled
-    const label = await fieldLabel(f);
-    await handleOne(label || `text field ${i + 1}`, 'text', (v) => f.fill(v));
+    const inputType = String(await f.getAttribute('type').catch(() => '') || '').toLowerCase();
+    const ariaLabel = String(await f.getAttribute('aria-label').catch(() => '') || '').trim();
+    const placeholder = String(await f.getAttribute('placeholder').catch(() => '') || '').trim();
+    const label = (await fieldLabel(f)) || ariaLabel || placeholder
+      || (inputType === 'tel' ? 'Mobile phone number' : inputType === 'email' ? 'Email address' : `text field ${i + 1}`);
+    await handleOne(label, 'text', (v) => f.fill(v));
   }
 
   // textareas
@@ -256,12 +296,14 @@ export async function answerLinkedInModal(page, answerCtx) {
     await handleOne(label || `textarea ${i + 1}`, 'textarea', (v) => f.fill(v));
   }
 
-  // selects
+  // selects (skip ones already holding a real value, e.g. Email + India (+91))
   const selects = modal.locator('select');
   const sn = await selects.count().catch(() => 0);
   for (let i = 0; i < sn; i++) {
     const f = selects.nth(i);
     if (!(await f.isVisible().catch(() => false))) continue;
+    const selected = String(await f.inputValue().catch(() => '') || '').trim();
+    if (selected && !/^select/i.test(selected)) continue; // already chosen — don't re-ask
     const label = await fieldLabel(f);
     const options = await f.locator('option').allInnerTexts().catch(() => []);
     const clean = options.map((o) => o.trim()).filter((o) => o && !/^select/i.test(o));
@@ -325,6 +367,8 @@ export async function applyLinkedInEasyApply(page, { job, resumePdfBuffer, userN
   const allAnswered = [];
   // Walk Next/Review steps, max 5. Auto-answer questions via stored Q&A -> qaProfile -> LLM.
   for (let step = 0; step < 5; step++) {
+    // Resume step (2/4) needs the PDF — retry upload every step, not just step 0.
+    await uploadResumeIfAsked(page, resumePdfBuffer, userName).catch(() => {});
     const { answered, unanswered } = await answerLinkedInModal(page, answerCtx);
     allAnswered.push(...answered);
     if (unanswered.length) {
